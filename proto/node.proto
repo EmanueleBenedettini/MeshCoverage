@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package meshmonitor;
+
+option python_package = "meshmonitor.proto";
+
+// Posizione geografica del nodo
+message Position {
+  double lat = 1;   // Latitudine (WGS84)
+  double lon = 2;   // Longitudine (WGS84)
+  double alt = 3;   // Altitudine slm (metri)
+}
+
+// Parametri antenna associata al nodo
+message AntennaParams {
+  float tx_power_dbm   = 1;  // Potenza trasmettitore (dBm)
+  string type          = 2;  // Tipo: dipole, collinear, yagi, j-pole, ecc.
+  float gain_dbi       = 3;  // Guadagno antenna (dBi)
+  float azimuth_deg    = 4;  // Angolo di puntamento (0=Nord, gradi)
+  float beamwidth_deg  = 5;  // Angolo di apertura (360 per omnidirezionale)
+  float gain_min_dbi   = 6;  // Guadagno minimo (dBi)
+  float gain_max_dbi   = 7;  // Guadagno massimo (dBi)
+  float gain_min_angle = 8;  // Angolo del guadagno minimo (gradi)
+  float gain_max_angle = 9;  // Angolo del guadagno massimo (gradi)
+  float elevation_deg  = 10; // Inclinazione verticale (positivo = sopra orizzonte)
+}
+
+// Preset modem Meshtastic con parametri LoRa associati
+enum ModemPreset {
+  SHORT_TURBO    = 0;
+  SHORT_FAST     = 1;
+  SHORT_SLOW     = 2;
+  MEDIUM_FAST    = 3;  // Default
+  MEDIUM_SLOW    = 4;
+  LONG_FAST      = 5;
+  LONG_MODERATE  = 6;
+  LONG_SLOW      = 7;
+  VERY_LONG_SLOW = 8;
+}
+
+// Nodo Meshtastic con tutti i parametri
+message Node {
+  string id              = 1;   // Es. "!aabbccdd"
+  string short_name      = 2;
+  string long_name       = 3;
+  string hardware_model  = 4;
+  string firmware        = 5;
+  Position position      = 6;
+  float ground_height_m  = 7;   // Altezza antenna dal suolo (metri)
+  uint32 frequency_mhz   = 8;   // 433, 868, 915
+  ModemPreset modem_preset = 9;
+  AntennaParams antenna  = 10;
+  string last_seen       = 11;  // ISO8601 timestamp
+  string notes           = 12;
+  bool data_complete     = 13;  // True se ha posizione + frequenza + antenna
+}
+
+// Collezione di nodi
+message NodeDatabase {
+  repeated Node nodes = 1;
+  string updated_at   = 2;
+}
