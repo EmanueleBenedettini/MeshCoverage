@@ -1,4 +1,4 @@
-# Installazione MeshMonitor
+# Installazione MeshCoverage
 
 ## Requisiti di sistema
 
@@ -14,7 +14,7 @@
 
 ### 1. Clonare il repository
 ```bash
-git clone https://github.com/your-org/meshmonitor.git
+git clone https://github.com/EmanueleBenedettini/MeshCoverage.git
 cd MeshMonitor
 ```
 
