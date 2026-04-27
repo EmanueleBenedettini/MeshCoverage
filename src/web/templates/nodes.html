@@ -1,0 +1,276 @@
+{% extends "base.html" %}
+{% block title %}MeshMonitor — Gestione Nodi{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/nodes.css">
+{% endblock %}
+
+{% block content %}
+<div class="page-container">
+
+  <div class="page-header">
+    <div>
+      <h1>Nodi</h1>
+      <p class="page-subtitle">
+        {{ total }} nodi totali &mdash;
+        <span class="text-success">{{ complete }} completi</span>,
+        <span class="text-warning">{{ total - complete }} incompleti</span>
+      </p>
+    </div>
+    <div class="page-actions">
+      <button class="btn btn-ghost" id="btn-import-json">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        Importa JSON
+      </button>
+      <button class="btn btn-primary" id="btn-add-node">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+        Aggiungi nodo
+      </button>
+    </div>
+  </div>
+
+  <!-- Filtro rapido -->
+  <div class="table-toolbar">
+    <input type="text" id="filter-nodes" placeholder="Cerca per ID, nome..." class="input-search">
+    <select id="filter-freq" class="input-select">
+      <option value="">Tutte le frequenze</option>
+      <option value="433">433 MHz</option>
+      <option value="868">868 MHz</option>
+      <option value="915">915 MHz</option>
+    </select>
+    <select id="filter-preset" class="input-select">
+      <option value="">Tutti i preset</option>
+      {% for p in presets %}
+      <option value="{{ p }}">{{ p }}</option>
+      {% endfor %}
+    </select>
+    <label class="toggle-row">
+      <input type="checkbox" id="filter-complete-only">
+      <span>Solo completi</span>
+    </label>
+  </div>
+
+  <!-- Tabella nodi -->
+  <div class="table-wrap">
+    <table id="nodes-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Nome</th>
+          <th>Posizione</th>
+          <th>Freq</th>
+          <th>Preset</th>
+          <th>Antenna</th>
+          <th>ERP</th>
+          <th>Ultimo contatto</th>
+          <th>Stato</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="nodes-tbody">
+        {% for node in nodes %}
+        <tr class="node-row {% if not node.is_complete %}row-incomplete{% endif %}"
+            data-id="{{ node.id }}"
+            data-name="{{ (node.short_name or '') | lower }}"
+            data-freq="{{ node.frequency_mhz or '' }}"
+            data-preset="{{ node.modem_preset or '' }}"
+            data-complete="{{ 'true' if node.is_complete else 'false' }}">
+          <td><code class="node-id">{{ node.id }}</code></td>
+          <td>
+            <div class="node-name-cell">
+              <span class="short-name">{{ node.short_name or '—' }}</span>
+              {% if node.long_name %}
+              <span class="long-name">{{ node.long_name }}</span>
+              {% endif %}
+            </div>
+          </td>
+          <td>
+            {% if node.position %}
+              <span class="coords">{{ "%.4f"|format(node.position.lat) }}, {{ "%.4f"|format(node.position.lon) }}</span>
+              {% if node.ground_height_m %}<span class="alt">↑{{ node.ground_height_m|int }}m</span>{% endif %}
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if node.frequency_mhz %}
+              <span class="badge badge-freq">{{ node.frequency_mhz }} MHz</span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if node.modem_preset %}
+              <span class="badge badge-preset" title="{{ preset_descriptions.get(node.modem_preset, '') }}">
+                {{ node.modem_preset }}
+              </span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if node.antenna and node.antenna.type %}
+              <span class="antenna-type">{{ node.antenna.type }}</span>
+              {% if node.antenna.gain_dbi %}<span class="gain">{{ node.antenna.gain_dbi }}dBi</span>{% endif %}
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if node.antenna and node.antenna.tx_power_dbm and node.antenna.gain_dbi %}
+              {% set erp = node.antenna.tx_power_dbm + node.antenna.gain_dbi %}
+              <span class="erp {% if erp > 27 %}erp-warning{% endif %}">
+                {{ "%.1f"|format(erp) }} dBm
+                {% if erp > 27 %}⚠{% endif %}
+              </span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if node.last_seen %}
+              <span class="last-seen" data-ts="{{ node.last_seen.isoformat() }}">
+                {{ node.last_seen.strftime('%d/%m %H:%M') }}
+              </span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if node.is_complete %}
+              <span class="status-badge status-complete">Completo</span>
+            {% else %}
+              <span class="status-badge status-incomplete">Incompleto</span>
+            {% endif %}
+          </td>
+          <td class="row-actions">
+            <button class="btn-icon" onclick="editNode('{{ node.id }}')" title="Modifica">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+            </button>
+            <button class="btn-icon btn-danger" onclick="deleteNode('{{ node.id }}')" title="Elimina">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/>
+                <path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
+              </svg>
+            </button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10" class="empty-row">Nessun nodo nel database</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Modal nodo -->
+<div id="node-modal" class="modal hidden">
+  <div class="modal-backdrop" onclick="closeModal()"></div>
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2 id="modal-title">Aggiungi nodo</h2>
+      <button class="btn-icon" onclick="closeModal()">✕</button>
+    </div>
+    <form id="node-form" class="modal-body">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>ID nodo <span class="req">*</span></label>
+          <input type="text" name="id" placeholder="!aabbccdd" pattern="![0-9a-f]{8}" required>
+        </div>
+        <div class="form-group">
+          <label>Nome breve</label>
+          <input type="text" name="short_name" placeholder="NODE" maxlength="4">
+        </div>
+        <div class="form-group span-2">
+          <label>Nome lungo</label>
+          <input type="text" name="long_name" placeholder="My Mesh Node">
+        </div>
+
+        <div class="form-group">
+          <label>Latitudine</label>
+          <input type="number" name="lat" step="0.000001" placeholder="45.000000">
+        </div>
+        <div class="form-group">
+          <label>Longitudine</label>
+          <input type="number" name="lon" step="0.000001" placeholder="9.000000">
+        </div>
+        <div class="form-group">
+          <label>Altezza antenna dal suolo (m)</label>
+          <input type="number" name="ground_height_m" step="0.5" min="0" placeholder="3">
+        </div>
+
+        <div class="form-group">
+          <label>Frequenza (MHz) <span class="req">*</span></label>
+          <select name="frequency_mhz">
+            <option value="">— seleziona —</option>
+            <option value="433">433 MHz</option>
+            <option value="868">868 MHz</option>
+            <option value="915">915 MHz</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Modem Preset <span class="req">*</span></label>
+          <select name="modem_preset">
+            <option value="">— seleziona —</option>
+            {% for p in presets %}
+            <option value="{{ p }}">{{ p }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-divider span-2">Parametri Antenna (opzionali)</div>
+
+        <div class="form-group">
+          <label>Potenza TX (dBm)</label>
+          <input type="number" name="tx_power_dbm" step="0.5" min="0" max="30" placeholder="20">
+        </div>
+        <div class="form-group">
+          <label>Tipo antenna</label>
+          <select name="antenna_type">
+            <option value="">— seleziona —</option>
+            <option value="dipole">Dipolo</option>
+            <option value="collinear">Collineare</option>
+            <option value="j-pole">J-Pole</option>
+            <option value="yagi">Yagi</option>
+            <option value="patch">Patch</option>
+            <option value="helical">Elicoidale</option>
+            <option value="other">Altro</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Guadagno (dBi)</label>
+          <input type="number" name="gain_dbi" step="0.01" placeholder="2.15">
+        </div>
+        <div class="form-group">
+          <label>Azimuth puntamento (°)</label>
+          <input type="number" name="azimuth_deg" step="1" min="0" max="359" placeholder="0">
+        </div>
+        <div class="form-group">
+          <label>Angolo apertura (°)</label>
+          <input type="number" name="beamwidth_deg" step="1" min="1" max="360" placeholder="360">
+        </div>
+        <div class="form-group">
+          <label>Guadagno minimo (dBi)</label>
+          <input type="number" name="gain_min_dbi" step="0.01" placeholder="2.15">
+        </div>
+        <div class="form-group">
+          <label>Guadagno massimo (dBi)</label>
+          <input type="number" name="gain_max_dbi" step="0.01" placeholder="2.15">
+        </div>
+        <div class="form-group span-2">
+          <label>Note</label>
+          <textarea name="notes" rows="2" placeholder="Posizione, installazione, ecc."></textarea>
+        </div>
+      </div>
+    </form>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Annulla</button>
+      <button class="btn btn-primary" onclick="saveNode()">Salva</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/nodes.js"></script>
+{% endblock %}

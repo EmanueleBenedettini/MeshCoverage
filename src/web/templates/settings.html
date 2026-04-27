@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}MeshMonitor — Impostazioni{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/settings.css">
+{% endblock %}
+
+{% block content %}
+<div class="page-container">
+  <div class="page-header">
+    <h1>Impostazioni e Stato</h1>
+    <p class="page-subtitle">Configurazione servizi di acquisizione e stato del sistema</p>
+  </div>
+
+  <div class="settings-grid">
+
+    <!-- Stato servizi input -->
+    <div class="settings-card">
+      <h2>Stato acquisizione dati</h2>
+      <div id="input-status-content">
+        <div class="spinner"></div>
+      </div>
+      <div class="card-actions">
+        <button class="btn btn-secondary" id="btn-start-input">Avvia</button>
+        <button class="btn btn-ghost" id="btn-stop-input">Ferma</button>
+        <button class="btn btn-ghost" id="btn-refresh-status">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"/>
+            <path d="M20.5 15a9 9 0 11-2.5-8.9L23 10"/>
+          </svg>
+          Aggiorna
+        </button>
+      </div>
+    </div>
+
+    <!-- Configurazione corrente -->
+    <div class="settings-card">
+      <h2>Configurazione corrente</h2>
+      <p class="card-note">Le impostazioni si modificano tramite variabili d'ambiente o file <code>.env</code>.</p>
+      <table class="config-table">
+        <tbody>
+          <tr><td>MQTT</td><td>
+            {% if config.mqtt_enabled %}
+              <span class="badge badge-ok">Abilitato</span>
+              {{ config.mqtt_broker }}:{{ config.mqtt_port }}
+            {% else %}
+              <span class="badge badge-off">Disabilitato</span>
+            {% endif %}
+          </td></tr>
+          <tr><td>Topic MQTT</td><td><code>{{ config.mqtt_topic }}</code></td></tr>
+          <tr><td>Connessione diretta</td><td>
+            {% if config.direct_enabled %}
+              <span class="badge badge-ok">Abilitato</span>
+              {{ config.direct_host }}:{{ config.direct_port }}
+            {% else %}
+              <span class="badge badge-off">Disabilitato</span>
+            {% endif %}
+          </td></tr>
+          <tr><td>Schedule calcolo</td><td><code>{{ config.compute_schedule }}</code></td></tr>
+          <tr><td>Directory DEM</td><td><code>{{ config.dem_dir }}</code></td></tr>
+          <tr><td>Range massimo</td><td>{{ config.max_range_km }} km</td></tr>
+          <tr><td>Risoluzione DEM</td><td>{{ config.dem_resolution }} m</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Stato DEM -->
+    <div class="settings-card">
+      <h2>File DEM</h2>
+      <div id="dem-status-content"><div class="spinner"></div></div>
+    </div>
+
+    <!-- Test connessione diretta -->
+    <div class="settings-card">
+      <h2>Test connessione nodo</h2>
+      <p class="card-note">Verifica la raggiungibilità di un nodo Meshtastic via TCP.</p>
+      <div class="form-row">
+        <input type="text" id="test-host" placeholder="192.168.1.100" class="input-text">
+        <input type="number" id="test-port" value="4403" min="1" max="65535" class="input-port">
+        <button class="btn btn-secondary" id="btn-test-connection">Test</button>
+      </div>
+      <div id="test-result" class="test-result hidden"></div>
+    </div>
+
+    <!-- Calcolo manuale -->
+    <div class="settings-card">
+      <h2>Calcolo copertura</h2>
+      <p class="card-note">Avvia manualmente il calcolo per tutti i nodi o uno specifico.</p>
+      <div class="form-row">
+        <button class="btn btn-primary" id="btn-compute-all">
+          Calcola tutti i nodi
+        </button>
+        <button class="btn btn-secondary" id="btn-regen-heatmaps">
+          Rigenera heatmap
+        </button>
+        <button class="btn btn-secondary" id="btn-recompute-links">
+          Ricalcola links
+        </button>
+      </div>
+      <div class="progress-wrap hidden" id="settings-progress-wrap">
+        <div class="progress-bar"><div class="progress-fill" id="settings-progress-bar"></div></div>
+        <span id="settings-progress-label">0%</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div id="toast-container"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/settings.js"></script>
+{% endblock %}

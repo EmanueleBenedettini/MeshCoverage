@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}MeshMonitor — Mappa{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/map.css">
+{% endblock %}
+
+{% block content %}
+<div class="map-layout">
+
+  <!-- ── Sidebar sinistra ── -->
+  <aside class="sidebar" id="sidebar">
+
+    <!-- Filtri -->
+    <section class="sidebar-section">
+      <h3 class="section-title">Filtri</h3>
+      <div class="filter-row">
+        <label>Frequenza</label>
+        <select id="sel-freq">
+          {% for f in available_freqs %}
+          <option value="{{ f }}">{{ f }} MHz</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="filter-row">
+        <label>Modem Preset</label>
+        <select id="sel-preset">
+          {% for p in available_presets %}
+          <option value="{{ p }}">{{ p }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="filter-row">
+        <label>Link budget min (dB)</label>
+        <input type="number" id="inp-min-budget" value="0" min="-30" max="30" step="1">
+      </div>
+
+      <div class="layer-toggles">
+        <label class="toggle-row">
+          <input type="checkbox" id="chk-heatmap" checked>
+          <span class="toggle-label">
+            <span class="dot" style="background:#f97316"></span>Heatmap copertura
+          </span>
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="chk-links" checked>
+          <span class="toggle-label">
+            <span class="dot" style="background:#3b82f6"></span>Connessioni dirette
+          </span>
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="chk-nodes" checked>
+          <span class="toggle-label">
+            <span class="dot" style="background:#22c55e"></span>Posizione nodi
+          </span>
+        </label>
+      </div>
+
+      <button class="btn btn-primary" id="btn-apply-filters">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+        Applica
+      </button>
+    </section>
+
+    <!-- Azioni -->
+    <section class="sidebar-section">
+      <h3 class="section-title">Calcolo</h3>
+      <button class="btn btn-secondary" id="btn-compute-all">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="5,3 19,12 5,21"/>
+        </svg>
+        Ricalcola tutti
+      </button>
+      <div class="progress-wrap hidden" id="compute-progress-wrap">
+        <div class="progress-bar"><div class="progress-fill" id="compute-progress-bar"></div></div>
+        <span id="compute-progress-label">0%</span>
+      </div>
+    </section>
+
+    <!-- Dettaglio nodo selezionato -->
+    <section class="sidebar-section" id="node-detail" style="display:none">
+      <div class="node-detail-header">
+        <h3 class="section-title" id="nd-title">Nodo</h3>
+        <button class="btn-icon" id="btn-close-detail" title="Chiudi">✕</button>
+      </div>
+
+      <div class="node-info-grid" id="nd-info"></div>
+
+      <!-- Diagramma di radiazione -->
+      <div class="radiation-wrap">
+        <canvas id="radiation-canvas" width="180" height="180"></canvas>
+      </div>
+
+      <!-- Connessioni dirette del nodo -->
+      <div id="nd-links-wrap">
+        <h4 class="subsection-title">Connessioni dirette</h4>
+        <ul id="nd-links-list" class="links-list"></ul>
+        <p id="nd-links-empty" class="empty-msg" style="display:none">Nessuna connessione diretta</p>
+      </div>
+
+      <div class="node-actions">
+        <button class="btn btn-secondary btn-sm" id="btn-compute-node">
+          Ricalcola copertura
+        </button>
+        <a class="btn btn-ghost btn-sm" id="btn-edit-node" href="#">
+          Modifica
+        </a>
+      </div>
+    </section>
+
+  </aside>
+
+  <!-- ── Mappa ── -->
+  <div id="map"></div>
+
+</div>
+
+<!-- Toast notifiche -->
+<div id="toast-container"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  const PRESET_INFO = {{ preset_info|safe }};
+  const AVAILABLE_FREQS = {{ available_freqs|tojson }};
+  const AVAILABLE_PRESETS = {{ available_presets|tojson }};
+</script>
+<script src="/static/js/map.js"></script>
+{% endblock %}
