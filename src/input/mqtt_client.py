@@ -12,9 +12,9 @@ from typing import Callable, Optional
 
 import paho.mqtt.client as mqtt
 
-from meshmonitor.config import settings
-from meshmonitor import database
-from meshmonitor.input.packet_parser import parse_mqtt_packet
+from meshcoverage.config import settings
+from meshcoverage import database
+from meshcoverage.input.packet_parser import parse_mqtt_packet
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ class MQTTClient:
         while self._running:
             try:
                 self._client = mqtt.Client(
-                    client_id=f"meshmonitor_{int(time.time())}",
+                    client_id=f"meshcoverage_{int(time.time())}",
                     clean_session=True,
                 )
                 self._client.on_connect = self._on_connect

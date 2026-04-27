@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package meshmonitor;
+package meshcoverage;
 
-option python_package = "meshmonitor.proto";
+option python_package = "meshcoverage.proto";
 
 // Posizione geografica del nodo
 message Position {

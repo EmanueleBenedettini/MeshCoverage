@@ -10,8 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from meshmonitor.config import settings
-from meshmonitor.models.node import Node, AntennaParams, Position
+from meshcoverage.config import settings
+from meshcoverage.models.node import Node, AntennaParams, Position
 
 log = logging.getLogger(__name__)
 _lock = threading.RLock()

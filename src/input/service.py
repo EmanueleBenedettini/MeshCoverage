@@ -11,15 +11,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from meshmonitor.config import settings
-from meshmonitor.input.mqtt_client import MQTTClient
-from meshmonitor.input.direct_client import DirectClient
+from meshcoverage.config import settings
+from meshcoverage.input.mqtt_client import MQTTClient
+from meshcoverage.input.direct_client import DirectClient
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
-log = logging.getLogger("meshmonitor.input.service")
+log = logging.getLogger("meshcoverage.input.service")
 
 
 class InputService:
@@ -37,19 +37,19 @@ class InputService:
             self.mqtt_client.start()
             log.info(f"MQTT attivato — broker: {settings.mqtt_broker}:{settings.mqtt_port}")
         else:
-            log.info("MQTT disabilitato (MESHMONITOR_MQTT_ENABLED=false)")
+            log.info("MQTT disabilitato (MESHCOVERAGE_MQTT_ENABLED=false)")
 
         if settings.direct_enabled:
             self.direct_client = DirectClient()
             self.direct_client.start()
             log.info(f"Connessione diretta attivata — {settings.direct_host}:{settings.direct_port}")
         else:
-            log.info("Connessione diretta disabilitata (MESHMONITOR_DIRECT_ENABLED=false)")
+            log.info("Connessione diretta disabilitata (MESHCOVERAGE_DIRECT_ENABLED=false)")
 
         if not settings.mqtt_enabled and not settings.direct_enabled:
             log.warning(
                 "Nessuna sorgente dati abilitata. "
-                "Impostare MESHMONITOR_MQTT_ENABLED=true o MESHMONITOR_DIRECT_ENABLED=true"
+                "Impostare MESHCOVERAGE_MQTT_ENABLED=true o MESHCOVERAGE_DIRECT_ENABLED=true"
             )
 
     def stop(self):

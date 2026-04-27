@@ -14,20 +14,20 @@ sys.path.insert(0, str(project_root))
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from meshmonitor.config import settings
+from meshcoverage.config import settings
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
-log = logging.getLogger("meshmonitor.scheduler")
+log = logging.getLogger("meshcoverage.scheduler")
 
 
 def run_full_computation():
     """Esegue il calcolo di copertura per tutti i nodi."""
     log.info("Avvio calcolo copertura schedulato...")
     result = subprocess.run(
-        [sys.executable, "-m", "meshmonitor.processing.coverage_calculator", "--all"],
+        [sys.executable, "-m", "meshcoverage.processing.coverage_calculator", "--all"],
         cwd=str(project_root),
         capture_output=True,
         text=True

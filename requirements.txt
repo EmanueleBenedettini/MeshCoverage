@@ -1,4 +1,4 @@
-# MeshMonitor requirements
+# MeshCoverage requirements
 
 # Meshtastic
 meshtastic>=2.3.0

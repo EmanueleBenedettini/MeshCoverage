@@ -300,7 +300,7 @@ def get_dem_handler() -> DEMHandler:
     """Restituisce l'istanza globale del DEMHandler (inizializzato se necessario)."""
     global _dem_handler
     if _dem_handler is None:
-        from meshmonitor.config import settings
+        from meshcoverage.config import settings
         _dem_handler = DEMHandler(settings.dem_dir)
         _dem_handler.initialize()
     return _dem_handler

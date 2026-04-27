@@ -13,18 +13,18 @@ from typing import Optional
 
 import click
 
-from meshmonitor.config import settings
-from meshmonitor import database
-from meshmonitor.models.node import Node, MODEM_PRESETS
-from meshmonitor.processing.dem_handler import get_dem_handler
-from meshmonitor.processing.link_budget import (
+from meshcoverage.config import settings
+from meshcoverage import database
+from meshcoverage.models.node import Node, MODEM_PRESETS
+from meshcoverage.processing.dem_handler import get_dem_handler
+from meshcoverage.processing.link_budget import (
     compute_node_link_budget_summary, check_erp_warning, max_range_km
 )
-from meshmonitor.processing.viewshed import (
+from meshcoverage.processing.viewshed import (
     ViewshedParams, compute_viewshed, save_viewshed, load_viewshed
 )
-from meshmonitor.processing.heatmap_generator import generate_heatmaps
-from meshmonitor.processing.node_links import compute_node_links
+from meshcoverage.processing.heatmap_generator import generate_heatmaps
+from meshcoverage.processing.node_links import compute_node_links
 
 log = logging.getLogger(__name__)
 

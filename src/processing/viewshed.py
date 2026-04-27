@@ -23,11 +23,11 @@ from typing import Optional
 
 import numpy as np
 
-from meshmonitor.processing.dem_handler import (
+from meshcoverage.processing.dem_handler import (
     DEMHandler, haversine_m, bearing_deg, earth_bulge_m, destination_point
 )
-from meshmonitor.processing.fresnel import check_los, check_fresnel_clearance
-from meshmonitor.processing.link_budget import calculate_link_budget
+from meshcoverage.processing.fresnel import check_los, check_fresnel_clearance
+from meshcoverage.processing.link_budget import calculate_link_budget
 
 log = logging.getLogger(__name__)
 
@@ -84,9 +84,9 @@ def _compute_point(args: tuple) -> Optional[dict]:
     ) = args
 
     try:
-        from meshmonitor.processing.dem_handler import DEMHandler, haversine_m
-        from meshmonitor.processing.fresnel import check_los, check_fresnel_clearance
-        from meshmonitor.processing.link_budget import calculate_link_budget
+        from meshcoverage.processing.dem_handler import DEMHandler, haversine_m
+        from meshcoverage.processing.fresnel import check_los, check_fresnel_clearance
+        from meshcoverage.processing.link_budget import calculate_link_budget
 
         dem = DEMHandler(Path(dem_dir_str))
         dem.initialize()

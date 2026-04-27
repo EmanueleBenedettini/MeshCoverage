@@ -7,7 +7,7 @@
 ## Architettura
 
 ```
-MeshMonitor/
+MeshCoverage/
 ├── proto/                   # Definizioni Protobuf
 ├── scripts/                 # Script di utilità e scheduling
 ├── src/
@@ -65,8 +65,8 @@ API REST documentata automaticamente su `/api/docs`
 Vedi [INSTALL.md](INSTALL.md) per le istruzioni complete.
 
 ```bash
-git clone https://github.com/your-org/meshmonitor.git
-cd MeshMonitor
+git clone https://github.com/your-org/meshcoverage.git
+cd MeshCoverage
 cp .env.example .env
 # Editare .env con la propria configurazione
 docker-compose up -d

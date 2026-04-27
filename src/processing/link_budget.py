@@ -11,7 +11,7 @@ import math
 import logging
 from typing import Optional
 
-from meshmonitor.models.node import MODEM_PRESETS, Node
+from meshcoverage.models.node import MODEM_PRESETS, Node
 
 log = logging.getLogger(__name__)
 
@@ -158,7 +158,7 @@ def check_erp_warning(tx_power_dbm: float, antenna_gain_dbi: float) -> tuple[flo
     Controlla se l'ERP supera il limite legale di +27 dBm (EU).
     Returns: (erp_dbm, warning)
     """
-    from meshmonitor.config import settings
+    from meshcoverage.config import settings
     erp = calculate_erp(tx_power_dbm, antenna_gain_dbi)
     warning = erp > settings.erp_warning_dbm
     return erp, warning

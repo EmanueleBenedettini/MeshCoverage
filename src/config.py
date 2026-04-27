@@ -1,5 +1,5 @@
 """
-Configurazione centralizzata MeshMonitor.
+Configurazione centralizzata MeshCoverage.
 Tutte le impostazioni sono lette da variabili d'ambiente o file .env.
 """
 from pathlib import Path
@@ -10,7 +10,7 @@ from pydantic import Field
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="MESHMONITOR_",
+        env_prefix="MESHCOVERAGE_",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",

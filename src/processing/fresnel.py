@@ -120,7 +120,7 @@ def check_los(
     if total_distance_m <= 0 or len(profile_distances_m) == 0:
         return True, float("inf")
 
-    from meshmonitor.processing.dem_handler import earth_bulge_m
+    from meshcoverage.processing.dem_handler import earth_bulge_m
     min_clearance = float("inf")
 
     for d1, elev in zip(profile_distances_m, profile_elevations):

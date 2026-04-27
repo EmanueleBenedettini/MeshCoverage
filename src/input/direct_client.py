@@ -8,9 +8,9 @@ import threading
 import time
 from typing import Callable, Optional
 
-from meshmonitor.config import settings
-from meshmonitor import database
-from meshmonitor.input.packet_parser import (
+from meshcoverage.config import settings
+from meshcoverage import database
+from meshcoverage.input.packet_parser import (
     parse_meshtastic_api_node,
     parse_mqtt_packet,
     node_id_to_hex,

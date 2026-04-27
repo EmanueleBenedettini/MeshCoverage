@@ -15,7 +15,7 @@
 ### 1. Clonare il repository
 ```bash
 git clone https://github.com/EmanueleBenedettini/MeshCoverage.git
-cd MeshMonitor
+cd MeshCoverage
 ```
 
 ### 2. Configurazione
@@ -89,9 +89,9 @@ mkdir -p data/{nodes,dem,coverage,heatmaps,links}
 
 | Variabile | Default | Descrizione |
 |---|---|---|
-| `MESHMONITOR_HOST` | `0.0.0.0` | Host del server web |
-| `MESHMONITOR_PORT` | `8000` | Porta del server web |
-| `MESHMONITOR_DATA_DIR` | `./data` | Directory dati |
+| `MESHCOVERAGE_HOST` | `0.0.0.0` | Host del server web |
+| `MESHCOVERAGE_PORT` | `8000` | Porta del server web |
+| `MESHCOVERAGE_DATA_DIR` | `./data` | Directory dati |
 | `MQTT_ENABLED` | `false` | Abilita connessione MQTT |
 | `MQTT_BROKER` | `mqtt.meshtastic.org` | Broker MQTT |
 | `MQTT_PORT` | `1883` | Porta MQTT |
@@ -132,7 +132,7 @@ wget -P data/dem/ "https://...copernicus-dem.../"
 ```
 
 ### Gestione file DEM multipli
-MeshMonitor gestisce automaticamente più file DEM affiancati. Basta copiare tutti i tile necessari nella directory `data/dem/`. Il sistema li indicizza all'avvio e usa il file corretto per ogni posizione geografica.
+MeshCoverage gestisce automaticamente più file DEM affiancati. Basta copiare tutti i tile necessari nella directory `data/dem/`. Il sistema li indicizza all'avvio e usa il file corretto per ogni posizione geografica.
 
 ---
 
@@ -151,11 +151,13 @@ docker-compose exec web python -m src.processing.coverage_calculator --all
 ```
 
 ### Manuale
-# Usa lo script helper per creare/attivare il venv, installare requisiti e avviare il web server
+```bash
+#Usa lo script helper per creare/attivare il venv, installare requisiti e avviare il web server
 bash scripts/start_web.sh
 # Oppure, per usare un comando uvicorn diverso:
 # bash scripts/start_web.sh uvicorn src.api.app:app --host 0.0.0.0 --port 8000
-
+```
+Altri comandi utili:
 ```bash
 source venv/bin/activate
 
