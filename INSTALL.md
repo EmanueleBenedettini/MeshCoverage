@@ -147,26 +147,31 @@ docker-compose up -d
 docker-compose up -d web
 
 # Ricalcolo manuale immediato
-docker-compose exec web python -m meshmonitor.processing.coverage_calculator --all
+docker-compose exec web python -m src.processing.coverage_calculator --all
 ```
 
 ### Manuale
+# Usa lo script helper per creare/attivare il venv, installare requisiti e avviare il web server
+bash scripts/start_web.sh
+# Oppure, per usare un comando uvicorn diverso:
+# bash scripts/start_web.sh uvicorn src.api.app:app --host 0.0.0.0 --port 8000
+
 ```bash
 source venv/bin/activate
 
 # Web server + API (porta 8000)
-uvicorn meshmonitor.api.app:app --host 0.0.0.0 --port 8000 --reload
+uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
 
 # Servizio acquisizione dati (in background)
-python -m meshmonitor.input.service &
+python -m src.input.service &
 
 # Scheduler (calcolo periodico)
 python scripts/scheduler.py &
 
 # Calcolo manuale immediato
-python -m meshmonitor.processing.coverage_calculator --all
+python -m src.processing.coverage_calculator --all
 # oppure per un nodo specifico
-python -m meshmonitor.processing.coverage_calculator --node !aabbccdd
+python -m src.processing.coverage_calculator --node !aabbccdd
 ```
 
 ---

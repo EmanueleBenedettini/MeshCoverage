@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from meshmonitor.models.node import Node, Position, MODEM_PRESETS
+from src.models.node import Node, Position, MODEM_PRESETS
 
 log = logging.getLogger(__name__)
 

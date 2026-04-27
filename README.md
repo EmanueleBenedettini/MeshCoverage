@@ -10,7 +10,7 @@
 MeshMonitor/
 ├── proto/                   # Definizioni Protobuf
 ├── scripts/                 # Script di utilità e scheduling
-├── meshmonitor/
+├── src/
 │   ├── config.py            # Configurazione centralizzata
 │   ├── database.py          # Gestione database nodi JSON
 │   ├── models/              # Modelli dati
