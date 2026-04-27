@@ -36,6 +36,7 @@ class DEMHandler:
         self.dem_dir = dem_dir
         self._datasets: list = []       # rasterio datasets aperti
         self._bounds: list[tuple] = []  # (minlon, minlat, maxlon, maxlat)
+        self._resolutions: list[float] = []  # risoluzione in metri per pixel
         self._merged_data: Optional[np.ndarray] = None
         self._merged_transform = None
         self._merged_crs = None
@@ -50,6 +51,7 @@ class DEMHandler:
 
         self._datasets = []
         self._bounds = []
+        self._resolutions = []
 
         tif_files = sorted(self.dem_dir.glob("*.tif")) + sorted(self.dem_dir.glob("*.tiff"))
         if not tif_files:
@@ -58,6 +60,7 @@ class DEMHandler:
 
         log.info(f"Trovati {len(tif_files)} file DEM in {self.dem_dir}")
 
+        dem_entries = []
         for f in tif_files:
             try:
                 ds = rasterio.open(f)
@@ -76,56 +79,63 @@ class DEMHandler:
                     b = ds.bounds
                     bounds_ll = (b.left, b.bottom, b.right, b.top)
 
-                self._datasets.append(ds)
-                self._bounds.append(bounds_ll)
-                log.debug(f"DEM caricato: {f.name} bounds={bounds_ll}")
+                # Calcola risoluzione in metri per pixel (media delle risoluzioni x,y)
+                resolution_m = (abs(ds.transform[0]) + abs(ds.transform[4])) / 2.0
+
+                dem_entries.append((ds, bounds_ll, resolution_m, f.name))
+                log.debug(f"DEM caricato: {f.name} bounds={bounds_ll} res={resolution_m:.2f}m")
             except Exception as e:
                 log.error(f"Errore apertura DEM {f}: {e}")
 
-        self._initialized = True
-        log.info(f"Inizializzati {len(self._datasets)} file DEM")
+        # Ordina per risoluzione crescente (più alta risoluzione prima)
+        dem_entries.sort(key=lambda x: x[2])
 
-    def _get_dataset_for(self, lat: float, lon: float) -> Optional[tuple]:
-        """Trova il dataset DEM che copre le coordinate date."""
-        for ds, bounds in zip(self._datasets, self._bounds):
-            minlon, minlat, maxlon, maxlat = bounds
-            if minlat <= lat <= maxlat and minlon <= lon <= maxlon:
-                return ds, bounds
-        return None, None
+        # Assegna agli attributi dell'istanza
+        for ds, bounds, res, name in dem_entries:
+            self._datasets.append(ds)
+            self._bounds.append(bounds)
+            self._resolutions.append(res)
+
+        self._initialized = True
+        log.info(f"Inizializzati {len(self._datasets)} file DEM (ordinati per risoluzione)")
 
     def get_elevation(self, lat: float, lon: float) -> Optional[float]:
         """
         Restituisce l'elevazione (metri slm) per le coordinate date.
-        Returns None se fuori dalla copertura DEM.
+        Prioritizza file ad alta risoluzione, fallback su bassa risoluzione se dati mancanti.
+        Elevazioni sotto 1000m sono considerate dati mancanti.
+        Returns None se fuori dalla copertura DEM o dati mancanti.
         """
         if not self._initialized or not self._datasets:
             return None
 
-        result = self._get_dataset_for(lat, lon)
-        if result[0] is None:
-            return None
+        for ds, bounds in zip(self._datasets, self._bounds):
+            minlon, minlat, maxlon, maxlat = bounds
+            if minlat <= lat <= maxlat and minlon <= lon <= maxlon:
+                try:
+                    # Trasforma lat/lon nel CRS del dataset
+                    if ds.crs and ds.crs.to_epsg() != 4326:
+                        transformer = Transformer.from_crs(
+                            "EPSG:4326", ds.crs, always_xy=True
+                        )
+                        x, y = transformer.transform(lon, lat)
+                    else:
+                        x, y = lon, lat
 
-        ds, _ = result
-        try:
-            # Trasforma lat/lon nel CRS del dataset
-            if ds.crs and ds.crs.to_epsg() != 4326:
-                transformer = Transformer.from_crs(
-                    "EPSG:4326", ds.crs, always_xy=True
-                )
-                x, y = transformer.transform(lon, lat)
-            else:
-                x, y = lon, lat
-
-            row, col = rowcol(ds.transform, x, y)
-            if 0 <= row < ds.height and 0 <= col < ds.width:
-                val = ds.read(1, window=rasterio.windows.Window(col, row, 1, 1))
-                elev = float(val[0, 0])
-                # Nodata check
-                if ds.nodata is not None and abs(elev - ds.nodata) < 1:
-                    return None
-                return elev
-        except Exception as e:
-            log.debug(f"get_elevation({lat},{lon}) error: {e}")
+                    row, col = rowcol(ds.transform, x, y)
+                    if 0 <= row < ds.height and 0 <= col < ds.width:
+                        val = ds.read(1, window=rasterio.windows.Window(col, row, 1, 1))
+                        elev = float(val[0, 0])
+                        # Nodata check
+                        if ds.nodata is not None and abs(elev - ds.nodata) < 1:
+                            continue  # Prova il prossimo file
+                        # Elevazioni sotto -1000m considerate mancanti
+                        if elev < -1000.0:
+                            continue  # Prova il prossimo file
+                        return elev
+                except Exception as e:
+                    log.debug(f"get_elevation({lat},{lon}) error: {e}")
+                    continue  # Prova il prossimo file
         return None
 
     def get_profile(
@@ -195,7 +205,13 @@ class DEMHandler:
 
     def covers(self, lat: float, lon: float) -> bool:
         """True se le coordinate sono coperte da almeno un file DEM."""
-        return self._get_dataset_for(lat, lon)[0] is not None
+        if not self._initialized or not self._datasets:
+            return False
+        for bounds in self._bounds:
+            minlon, minlat, maxlon, maxlat = bounds
+            if minlat <= lat <= maxlat and minlon <= lon <= maxlon:
+                return True
+        return False
 
     @property
     def coverage_bounds(self) -> list[tuple]:
