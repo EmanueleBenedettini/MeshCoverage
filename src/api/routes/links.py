@@ -1,0 +1,1 @@
+# serve il file JSON delle connessioni dirette tra nodi, filtrato per frequenza e preset.

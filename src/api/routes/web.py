@@ -1,0 +1,1 @@
+# serve le pagine HTML tramite Jinja2 (la mappa principale, il pannello nodo, ecc.).
