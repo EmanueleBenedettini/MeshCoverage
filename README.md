@@ -1,6 +1,6 @@
-# MeshMonitor
+# MeshCoverage
 
-**MeshMonitor** è un sistema completo per il calcolo e la visualizzazione delle aree di copertura radio di una mesh di antenne Meshtastic. Raccoglie dati dai nodi via MQTT o connessione diretta, calcola la copertura usando dati DEM (Digital Elevation Model) con analisi di visibilità, zona di Fresnel e link budget, e presenta i risultati su mappa interattiva.
+**MeshCoverage** è un sistema completo per il calcolo e la visualizzazione delle aree di copertura radio di una mesh di antenne Meshtastic. Raccoglie dati dai nodi via MQTT o connessione diretta, calcola la copertura usando dati DEM (Digital Elevation Model) con analisi di visibilità, zona di Fresnel e link budget, e presenta i risultati su mappa interattiva.
 
 ---
 
@@ -123,4 +123,4 @@ GeoJSON FeatureCollection con proprietà `link_budget_dbm` per ogni punto.
 ---
 
 ## Licenza
-MIT License — vedi [LICENSE](LICENSE)
+GPL-3.0 license 
