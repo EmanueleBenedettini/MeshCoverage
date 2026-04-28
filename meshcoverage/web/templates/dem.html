@@ -1,0 +1,62 @@
+<!-- DEM file management: accessible through settings -->
+{% extends "base.html" %}
+{% block title %}MeshCoverage — DEM Files{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/settings.css">
+{% endblock %}
+
+{% block content %}
+<div class="page-container">
+  <div class="page-header">
+    <h1>DEM Files Management</h1>
+    <p class="page-subtitle">View, upload, download, and remove Digital Elevation Model files</p>
+  </div>
+
+  <div class="settings-grid">
+
+    <!-- Upload DEM File -->
+    <div class="settings-card">
+      <h2>Upload DEM File</h2>
+      <p class="card-note">Upload a new GeoTIFF DEM file to the system.</p>
+      <form id="upload-form" enctype="multipart/form-data">
+        <div class="form-row">
+          <input type="file" id="dem-file" accept=".tif,.tiff" required>
+          <button type="submit" class="btn btn-primary">Upload</button>
+        </div>
+      </form>
+      <div id="upload-progress" class="progress-wrap hidden">
+        <div class="progress-bar"><div class="progress-fill" id="upload-progress-bar"></div></div>
+        <span id="upload-progress-label">0%</span>
+      </div>
+    </div>
+
+    <!-- DEM Files List -->
+    <div class="settings-card">
+      <h2>DEM Files</h2>
+      <div id="dem-files-list">
+        <div class="spinner"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<!-- Confirmation Modal for Deletion -->
+<div id="delete-modal" class="modal hidden">
+  <div class="modal-content">
+    <h3>Confirm Deletion</h3>
+    <p>Are you sure you want to delete <strong id="delete-filename"></strong>?</p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btn-cancel-delete">Cancel</button>
+      <button class="btn btn-danger" id="btn-confirm-delete">Delete</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/dem.js"></script>
+{% endblock %}

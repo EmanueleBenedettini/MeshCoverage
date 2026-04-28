@@ -106,3 +106,15 @@ async def settings_page(request: Request):
             },
         },
     )
+
+
+@router.get("/dem", response_class=HTMLResponse)
+async def dem_page(request: Request):
+    """DEM files management page."""
+    return templates.TemplateResponse(
+        request,
+        "dem.html",
+        {
+            "title": "MeshCoverage — DEM Files",
+        }
+    )

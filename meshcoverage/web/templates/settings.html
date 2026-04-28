@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}MeshMonitor — Impostazioni{% endblock %}
+{% block title %}MeshCoverage — Impostazioni{% endblock %}
 
 {% block extra_css %}
 <link rel="stylesheet" href="/static/css/settings.css">
@@ -68,6 +68,9 @@
     <div class="settings-card">
       <h2>File DEM</h2>
       <div id="dem-status-content"><div class="spinner"></div></div>
+      <div class="card-actions">
+        <a href="/dem" class="btn btn-secondary">Manage DEM Files</a>
+      </div>
     </div>
 
     <!-- Test connessione diretta -->
