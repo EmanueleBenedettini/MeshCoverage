@@ -1,48 +1,48 @@
-# Installazione MeshCoverage
+# MeshCoverage Installation
 
-## Requisiti di sistema
+## System Requirements
 
-- **OS**: Linux (Ubuntu 22.04+ raccomandato), macOS, o Docker
+- **OS**: Linux (Ubuntu 22.04+ recommended), macOS, or Docker
 - **Python**: 3.11+
-- **RAM**: 4 GB minimi, 8+ GB raccomandati per calcoli DEM su aree estese
-- **CPU**: Almeno 4 core raccomandati (il calcolo viewshed è parallelizzato)
-- **Disco**: Dipende dai file DEM; tipicamente 1–10 GB per area regionale
+- **RAM**: 4 GB minimum, 8+ GB recommended for DEM calculations over large areas
+- **CPU**: At least 4 cores recommended (viewshed calculation is parallelised)
+- **Disk**: Depends on DEM files; typically 1–10 GB for regional areas
 
 ---
 
-## Installazione con Docker (raccomandato per produzione)
+## Installation with Docker (recommended for production)
 
-### 1. Clonare il repository
+### 1. Clone the repository
 ```bash
 git clone https://github.com/EmanueleBenedettini/MeshCoverage.git
 cd MeshCoverage
 ```
 
-### 2. Configurazione
+### 2. Configuration
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-Editare le variabili necessarie (vedere sezione Configurazione).
+Edit the necessary variables (see Configuration section).
 
-### 3. Avvio
+### 3. Start
 ```bash
 docker-compose up -d
 ```
 
-Controllare i log:
+Check the logs:
 ```bash
 docker-compose logs -f
 ```
 
-L'interfaccia web sarà disponibile su `http://localhost:8000`
+The web interface will be available at `http://localhost:8000`
 
 ---
 
-## Installazione manuale (sviluppo / bare-metal)
+## Manual Installation (development / bare-metal)
 
-### 1. Dipendenze di sistema (Ubuntu/Debian)
+### 1. System dependencies (Ubuntu/Debian)
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
@@ -54,153 +54,153 @@ sudo apt-get install -y \
     git curl
 ```
 
-### 2. Ambiente virtuale Python
+### 2. Python virtual environment
 ```bash
 python3.11 -m venv venv
 source venv/bin/activate
 ```
 
-### 3. Installazione dipendenze Python
+### 3. Install Python dependencies
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 4. Generazione codice Protobuf
+### 4. Generate Protobuf code
 ```bash
 chmod +x scripts/generate_proto.sh
 ./scripts/generate_proto.sh
 ```
 
-### 5. Configurazione
+### 5. Configuration
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-### 6. Creazione directory dati
+### 6. Create data directories
 ```bash
 mkdir -p data/{nodes,dem,coverage,heatmaps,links}
 ```
 
 ---
 
-## Configurazione (.env)
+## Configuration (.env)
 
-| Variabile | Default | Descrizione |
+| Variable | Default | Description |
 |---|---|---|
-| `MESHCOVERAGE_HOST` | `0.0.0.0` | Host del server web |
-| `MESHCOVERAGE_PORT` | `8000` | Porta del server web |
-| `MESHCOVERAGE_DATA_DIR` | `./data` | Directory dati |
-| `MQTT_ENABLED` | `false` | Abilita connessione MQTT |
-| `MQTT_BROKER` | `mqtt.meshtastic.org` | Broker MQTT |
-| `MQTT_PORT` | `1883` | Porta MQTT |
-| `MQTT_USERNAME` | `` | Username MQTT (opzionale) |
-| `MQTT_PASSWORD` | `` | Password MQTT (opzionale) |
-| `MQTT_TOPIC` | `msh/#` | Topic MQTT da sottoscrivere |
-| `DIRECT_ENABLED` | `false` | Abilita connessione diretta |
-| `DIRECT_HOST` | `localhost` | IP nodo Meshtastic |
-| `DIRECT_PORT` | `4403` | Porta nodo Meshtastic |
-| `COMPUTE_SCHEDULE` | `0 3 * * *` | Cron per calcolo automatico (3:00 ogni notte) |
-| `DEM_DIR` | `./data/dem` | Directory file DEM |
-| `DEM_RESOLUTION` | `30` | Risoluzione DEM target in metri |
-| `MAX_WORKERS` | `0` | Core CPU per parallelizzazione (0=auto) |
-| `LOG_LEVEL` | `INFO` | Livello log (DEBUG/INFO/WARNING/ERROR) |
-| `SECRET_KEY` | `changeme` | Chiave segreta per sessioni |
+| `MESHCOVERAGE_HOST` | `0.0.0.0` | Web server host |
+| `MESHCOVERAGE_PORT` | `8000` | Web server port |
+| `MESHCOVERAGE_DATA_DIR` | `./data` | Data directory |
+| `MQTT_ENABLED` | `false` | Enable MQTT connection |
+| `MQTT_BROKER` | `mqtt.meshtastic.org` | MQTT broker |
+| `MQTT_PORT` | `1883` | MQTT port |
+| `MQTT_USERNAME` | `` | MQTT username (optional) |
+| `MQTT_PASSWORD` | `` | MQTT password (optional) |
+| `MQTT_TOPIC` | `msh/#` | MQTT topic to subscribe to |
+| `DIRECT_ENABLED` | `false` | Enable direct connection |
+| `DIRECT_HOST` | `localhost` | Meshtastic node IP |
+| `DIRECT_PORT` | `4403` | Meshtastic node port |
+| `COMPUTE_SCHEDULE` | `0 3 * * *` | Cron for automatic calculation (3:00 every night) |
+| `DEM_DIR` | `./data/dem` | DEM file directory |
+| `DEM_RESOLUTION` | `30` | Target DEM resolution in metres |
+| `MAX_WORKERS` | `0` | CPU cores for parallelisation (0=auto) |
+| `LOG_LEVEL` | `INFO` | Log level (DEBUG/INFO/WARNING/ERROR) |
+| `SECRET_KEY` | `changeme` | Secret key for sessions |
 
 ---
 
-## Caricamento file DEM
+## Loading DEM Files
 
-I file DEM (Digital Elevation Model) in formato **GeoTIFF** vanno copiati nella directory `data/dem/`.
+DEM (Digital Elevation Model) files in **GeoTIFF** format should be copied to the `data/dem/` directory.
 
-### Fonti DEM consigliate
+### Recommended DEM sources
 
-**Europa (risoluzione 25m):**
-- [Copernicus DEM](https://copernicus.eu/en/access-data/copernicus-services/land-dem) - GLO-30 (30m globale, gratuito)
-- [EU-DEM](https://www.eea.europa.eu/data-and-maps/data/copernicus-land-monitoring-service-eu-dem) - 25m Europa
+**Europe (25m resolution):**
+- [Copernicus DEM](https://copernicus.eu/en/access-data/copernicus-services/land-dem) - GLO-30 (30m global, free)
+- [EU-DEM](https://www.eea.europa.eu/data-and-maps/data/copernicus-land-monitoring-service-eu-dem) - 25m Europe
 
-**Italia:**
-- [TINITALY](http://tinitaly.pi.ingv.it/) - 10m, ottima qualità per il territorio italiano
-- [Portale Cartografico Nazionale](http://www.pcn.minambiente.it/) - DTM regionali
+**Italy:**
+- [TINITALY](http://tinitaly.pi.ingv.it/) - 10m, excellent quality for Italian territory
+- [National Cartographic Portal](http://www.pcn.minambiente.it/) - Regional DTM
 
-**Download esempio con wget (Copernicus GLO-30):**
+**Example download with wget (Copernicus GLO-30):**
 ```bash
-# Scaricare tile per l'area di interesse (es. Italia settentrionale)
-# I file si chiamano Copernicus_DSM_COG_10_N45_00_E010_00_DEM.tif
+# Download tile for your area of interest (e.g. northern Italy)
+# Files are named Copernicus_DSM_COG_10_N45_00_E010_00_DEM.tif
 wget -P data/dem/ "https://...copernicus-dem.../"
 ```
 
-### Gestione file DEM multipli
-MeshCoverage gestisce automaticamente più file DEM affiancati. Basta copiare tutti i tile necessari nella directory `data/dem/`. Il sistema li indicizza all'avvio e usa il file corretto per ogni posizione geografica.
+### Multiple DEM file management
+MeshCoverage automatically handles multiple adjacent DEM files. Simply copy all necessary tiles to the `data/dem/` directory. The system indexes them on startup and uses the correct file for each geographic location.
 
 ---
 
-## Avvio servizi
+## Starting Services
 
-### Con Docker Compose
+### With Docker Compose
 ```bash
-# Avvio completo (web server + input service + scheduler)
+# Full startup (web server + input service + scheduler)
 docker-compose up -d
 
-# Solo web server (senza acquisizione automatica)
+# Web server only (without automatic data acquisition)
 docker-compose up -d web
 
-# Ricalcolo manuale immediato
+# Immediate manual recalculation
 docker-compose exec web python -m src.processing.coverage_calculator --all
 ```
 
-### Manuale
+### Manual
 ```bash
-#Usa lo script helper per creare/attivare il venv, installare requisiti e avviare il web server
+# Use the helper script to create/activate venv, install requirements and start the web server
 bash scripts/start_web.sh
-# Oppure, per usare un comando uvicorn diverso:
+# Or, to use a different uvicorn command:
 # bash scripts/start_web.sh uvicorn src.api.app:app --host 0.0.0.0 --port 8000
 ```
-Altri comandi utili:
+Other useful commands:
 ```bash
 source venv/bin/activate
 
-# Web server + API (porta 8000)
+# Web server + API (port 8000)
 uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
 
-# Servizio acquisizione dati (in background)
+# Data acquisition service (in background)
 python -m src.input.service &
 
-# Scheduler (calcolo periodico)
+# Scheduler (periodic calculation)
 python scripts/scheduler.py &
 
-# Calcolo manuale immediato
+# Immediate manual calculation
 python -m src.processing.coverage_calculator --all
-# oppure per un nodo specifico
+# or for a specific node
 python -m src.processing.coverage_calculator --node !aabbccdd
 ```
 
 ---
 
-## Aggiornamento
+## Update
 
 ```bash
 git pull origin main
-pip install -r requirements.txt  # aggiorna dipendenze
-./scripts/generate_proto.sh       # rigenera protobuf se modificati
-docker-compose restart            # riavvia servizi
+pip install -r requirements.txt  # update dependencies
+./scripts/generate_proto.sh       # regenerate protobuf if modified
+docker-compose restart            # restart services
 ```
 
 ---
 
 ## Troubleshooting
 
-**Errore "No DEM data for coordinates":**
-- Verificare che i file DEM coprano l'area dei nodi
-- Controllare che i file siano in formato GeoTIFF (`.tif`)
+**Error "No DEM data for coordinates":**
+- Verify that DEM files cover the area of your nodes
+- Check that files are in GeoTIFF format (`.tif`)
 
-**Calcolo lento:**
-- Aumentare `MAX_WORKERS` nel `.env`
-- Ridurre la risoluzione DEM (`DEM_RESOLUTION=60` per calcoli più veloci)
-- Limitare la distanza massima (`MAX_RANGE_KM` nella config del nodo)
+**Slow calculation:**
+- Increase `MAX_WORKERS` in `.env`
+- Reduce DEM resolution (`DEM_RESOLUTION=60` for faster calculations)
+- Limit maximum distance (`MAX_RANGE_KM` in node configuration)
 
-**Connessione MQTT fallisce:**
-- Verificare firewall su porta 1883
-- Controllare credenziali nel `.env`
-- Testare con `mosquitto_sub -h mqtt.meshtastic.org -t "msh/#"`
+**MQTT connection fails:**
+- Check firewall on port 1883
+- Verify credentials in `.env`
+- Test with `mosquitto_sub -h mqtt.meshtastic.org -t "msh/#"`
