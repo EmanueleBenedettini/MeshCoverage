@@ -1,6 +1,6 @@
 """
-Servizio di acquisizione dati Meshtastic.
-Avvia i client MQTT e/o diretto in base alla configurazione.
+Meshtastic data acquisition service.
+Starts MQTT and/or direct clients based on configuration.
 """
 from __future__ import annotations
 import logging
@@ -35,21 +35,21 @@ class InputService:
         if settings.mqtt_enabled:
             self.mqtt_client = MQTTClient()
             self.mqtt_client.start()
-            log.info(f"MQTT attivato — broker: {settings.mqtt_broker}:{settings.mqtt_port}")
+            log.info(f"MQTT enabled — broker: {settings.mqtt_broker}:{settings.mqtt_port}")
         else:
-            log.info("MQTT disabilitato (MESHCOVERAGE_MQTT_ENABLED=false)")
+            log.info("MQTT disabled (MESHCOVERAGE_MQTT_ENABLED=false)")
 
         if settings.direct_enabled:
             self.direct_client = DirectClient()
             self.direct_client.start()
-            log.info(f"Connessione diretta attivata — {settings.direct_host}:{settings.direct_port}")
+            log.info(f"Direct connection enabled — {settings.direct_host}:{settings.direct_port}")
         else:
-            log.info("Connessione diretta disabilitata (MESHCOVERAGE_DIRECT_ENABLED=false)")
+            log.info("Direct connection disabled (MESHCOVERAGE_DIRECT_ENABLED=false)")
 
         if not settings.mqtt_enabled and not settings.direct_enabled:
             log.warning(
-                "Nessuna sorgente dati abilitata. "
-                "Impostare MESHCOVERAGE_MQTT_ENABLED=true o MESHCOVERAGE_DIRECT_ENABLED=true"
+                "No data source enabled. "
+                "Set MESHCOVERAGE_MQTT_ENABLED=true or MESHCOVERAGE_DIRECT_ENABLED=true"
             )
 
     def stop(self):
@@ -61,10 +61,10 @@ class InputService:
 
     def run_forever(self):
         self.start()
-        log.info("Servizio acquisizione dati avviato. Ctrl+C per fermare.")
+        log.info("Data acquisition service started. Ctrl+C to stop.")
 
         def _signal_handler(sig, frame):
-            log.info("Signal ricevuto, arresto in corso...")
+            log.info("Signal received, stopping...")
             self.stop()
             sys.exit(0)
 
@@ -72,7 +72,7 @@ class InputService:
         signal.signal(signal.SIGTERM, _signal_handler)
 
         while self._running:
-            # Log periodico statistiche
+            # Periodic statistics logging
             time.sleep(60)
             self._log_stats()
 
@@ -81,13 +81,13 @@ class InputService:
         if self.mqtt_client:
             s = self.mqtt_client.stats
             parts.append(
-                f"MQTT: pkt={s['packets_received']} nodi={s['nodes_updated']} "
+                f"MQTT: pkt={s['packets_received']} nodes={s['nodes_updated']} "
                 f"err={s['errors']} conn={'✓' if s['connected'] else '✗'}"
             )
         if self.direct_client:
             s = self.direct_client.stats
             parts.append(
-                f"Direct: pkt={s['packets_received']} nodi={s['nodes_updated']} "
+                f"Direct: pkt={s['packets_received']} nodes={s['nodes_updated']} "
                 f"err={s['errors']} conn={'✓' if s['connected'] else '✗'}"
             )
         if parts:
