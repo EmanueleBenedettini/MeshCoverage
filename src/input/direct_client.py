@@ -1,6 +1,6 @@
 """
-Client connessione diretta a nodo Meshtastic via TCP (porta 4403).
-Usa la libreria Python ufficiale meshtastic.
+Direct connection client to Meshtastic node via TCP (port 4403).
+Uses the official Python meshtastic library.
 """
 from __future__ import annotations
 import logging
@@ -21,8 +21,8 @@ log = logging.getLogger(__name__)
 
 class DirectClient:
     """
-    Connessione diretta a nodo Meshtastic via TCP.
-    Porta standard: 4403.
+    Direct connection to Meshtastic node via TCP.
+    Standard port: 4403.
     """
 
     def __init__(
@@ -48,7 +48,7 @@ class DirectClient:
         }
 
     def _on_receive(self, packet, interface):
-        """Callback per pacchetti ricevuti dal nodo."""
+        """Callback for packets received from the node."""
         self.stats["packets_received"] += 1
         try:
             nodes = parse_mqtt_packet(packet)
@@ -59,12 +59,12 @@ class DirectClient:
                     self.on_node_update(node)
         except Exception as e:
             self.stats["errors"] += 1
-            log.error(f"Errore elaborazione pacchetto diretto: {e}")
+            log.error(f"Error processing direct packet: {e}")
 
     def _sync_node_list(self, interface):
         """
-        Sincronizza la lista nodi completa dall'interfaccia.
-        Il client Meshtastic mantiene in memoria tutti i nodi visti nella mesh.
+        Synchronises the complete node list from the interface.
+        The Meshtastic client maintains all seen nodes in memory.
         """
         try:
             nodes = interface.nodes
@@ -80,12 +80,12 @@ class DirectClient:
                     if self.on_node_update:
                         self.on_node_update(node)
 
-            log.info(f"Sincronizzati {count} nodi dalla mesh locale")
+            log.info(f"Synchronised {count} nodes from local mesh")
         except Exception as e:
-            log.error(f"Errore sincronizzazione nodi: {e}")
+            log.error(f"Error synchronising nodes: {e}")
 
     def start(self):
-        """Avvia il client diretto in un thread separato."""
+        """Starts the direct client in a separate thread."""
         if self._running:
             return
         self._running = True
@@ -93,10 +93,10 @@ class DirectClient:
             target=self._run_loop, daemon=True, name="direct-client"
         )
         self._thread.start()
-        log.info(f"Thread connessione diretta avviato ({self.host}:{self.port})")
+        log.info(f"Direct connection thread started ({self.host}:{self.port})")
 
     def stop(self):
-        """Ferma il client diretto."""
+        """Stops the direct client."""
         self._running = False
         if self._interface:
             try:
@@ -105,49 +105,49 @@ class DirectClient:
                 pass
         if self._thread:
             self._thread.join(timeout=10)
-        log.info("Client diretto fermato")
+        log.info("Direct client stopped")
 
     def _run_loop(self):
         while self._running:
             try:
-                # Import qui per evitare errori se meshtastic non è installato
+                # Import here to avoid errors if meshtastic is not installed
                 import meshtastic
                 import meshtastic.tcp_interface
                 from pubsub import pub
 
-                log.info(f"Connessione a {self.host}:{self.port}...")
+                log.info(f"Connecting to {self.host}:{self.port}...")
                 self._interface = meshtastic.tcp_interface.TCPInterface(
                     hostname=self.host,
                     portNumber=self.port,
                 )
                 self.stats["connected"] = True
-                log.info(f"Connesso a nodo Meshtastic su {self.host}:{self.port}")
+                log.info(f"Connected to Meshtastic node on {self.host}:{self.port}")
 
-                # Sincronizza nodi esistenti
-                time.sleep(3)  # attendi init
+                # Synchronise existing nodes
+                time.sleep(3)  # wait for init
                 self._sync_node_list(self._interface)
 
-                # Sottoscrivi ai nuovi pacchetti
+                # Subscribe to new packets
                 pub.subscribe(self._on_receive, "meshtastic.receive")
 
-                # Loop di keepalive — aggiorna nodi ogni 5 minuti
+                # Keepalive loop — update nodes every 5 minutes
                 while self._running:
                     time.sleep(300)
                     self._sync_node_list(self._interface)
 
             except ImportError:
                 log.error(
-                    "Libreria 'meshtastic' non trovata. "
-                    "Installare con: pip install meshtastic"
+                    "Library 'meshtastic' not found. "
+                    "Install with: pip install meshtastic"
                 )
                 break
 
             except Exception as e:
                 self.stats["connected"] = False
-                log.error(f"Errore connessione diretta: {e}")
+                log.error(f"Direct connection error: {e}")
 
             if self._running:
-                log.info(f"Riconnessione in {self._reconnect_delay}s...")
+                log.info(f"Reconnecting in {self._reconnect_delay}s...")
                 time.sleep(self._reconnect_delay)
 
     def is_connected(self) -> bool:
