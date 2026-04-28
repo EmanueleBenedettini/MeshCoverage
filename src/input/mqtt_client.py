@@ -1,7 +1,7 @@
 """
-Client MQTT per acquisizione dati da broker Meshtastic.
-Si connette a un broker MQTT (es. mqtt.meshtastic.org) e analizza
-i pacchetti ricevuti per estrarre informazioni sui nodi.
+MQTT client for data acquisition from Meshtastic broker.
+Connects to an MQTT broker (e.g. mqtt.meshtastic.org) and analyses
+received packets to extract node information.
 """
 from __future__ import annotations
 import json
@@ -21,8 +21,8 @@ log = logging.getLogger(__name__)
 
 class MQTTClient:
     """
-    Client MQTT per Meshtastic.
-    Riceve pacchetti dal broker e aggiorna il database nodi.
+    MQTT client for Meshtastic.
+    Receives packets from the broker and updates the node database.
     """
 
     def __init__(
@@ -57,35 +57,35 @@ class MQTTClient:
 
     def _on_connect(self, client, userdata, flags, rc):
         if rc == 0:
-            log.info(f"MQTT connesso a {self.broker}:{self.port}")
+            log.info(f"MQTT connected to {self.broker}:{self.port}")
             self.stats["connected"] = True
             client.subscribe(self.topic)
-            log.info(f"Sottoscritto a topic: {self.topic}")
+            log.info(f"Subscribed to topic: {self.topic}")
         else:
-            log.error(f"MQTT connessione fallita, codice: {rc}")
+            log.error(f"MQTT connection failed, code: {rc}")
             self.stats["connected"] = False
 
     def _on_disconnect(self, client, userdata, rc):
         self.stats["connected"] = False
         if rc != 0:
-            log.warning(f"MQTT disconnesso inaspettatamente (rc={rc}), riconnessione...")
+            log.warning(f"MQTT disconnected unexpectedly (rc={rc}), reconnecting...")
 
     def _on_message(self, client, userdata, msg):
         self.stats["packets_received"] += 1
         try:
-            # I pacchetti Meshtastic su MQTT possono essere JSON o protobuf binario
+            # Meshtastic packets on MQTT can be JSON or binary protobuf
             payload = msg.payload
 
-            # Prova prima il parsing JSON
+            # Try JSON parsing first
             try:
                 packet = json.loads(payload.decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError):
-                # Pacchetto binario protobuf — richiede meshtastic.mesh_pb2
-                # per ora lo logghiamo e saltiamo
-                log.debug(f"Pacchetto non-JSON su {msg.topic}, skip")
+                # Binary protobuf packet — requires meshtastic.mesh_pb2
+                # for now we log and skip
+                log.debug(f"Non-JSON packet on {msg.topic}, skip")
                 return
 
-            # Estrai i nodi dal pacchetto
+            # Extract nodes from packet
             nodes = parse_mqtt_packet(packet)
             for node in nodes:
                 database.upsert_node(node)
@@ -94,14 +94,14 @@ class MQTTClient:
                     self.on_node_update(node)
 
             if nodes:
-                log.debug(f"[MQTT] {len(nodes)} nodi aggiornati da {msg.topic}")
+                log.debug(f"[MQTT] {len(nodes)} nodes updated from {msg.topic}")
 
         except Exception as e:
             self.stats["errors"] += 1
-            log.error(f"Errore elaborazione messaggio MQTT: {e}", exc_info=True)
+            log.error(f"Error processing MQTT message: {e}", exc_info=True)
 
     def start(self):
-        """Avvia il client MQTT in un thread separato."""
+        """Starts the MQTT client in a separate thread."""
         if self._running:
             return
 
@@ -110,17 +110,17 @@ class MQTTClient:
             target=self._run_loop, daemon=True, name="mqtt-client"
         )
         self._thread.start()
-        log.info("Thread MQTT avviato")
+        log.info("MQTT thread started")
 
     def stop(self):
-        """Ferma il client MQTT."""
+        """Stops the MQTT client."""
         self._running = False
         if self._client:
             self._client.disconnect()
             self._client.loop_stop()
         if self._thread:
             self._thread.join(timeout=5)
-        log.info("Client MQTT fermato")
+        log.info("MQTT client stopped")
 
     def _run_loop(self):
         while self._running:
@@ -143,10 +143,10 @@ class MQTTClient:
                 self._client.loop_forever(retry_first_connection=True)
 
             except Exception as e:
-                log.error(f"Errore loop MQTT: {e}")
+                log.error(f"MQTT loop error: {e}")
 
             if self._running:
-                log.info(f"Riconnessione MQTT in {self._reconnect_delay}s...")
+                log.info(f"MQTT reconnecting in {self._reconnect_delay}s...")
                 time.sleep(self._reconnect_delay)
 
     def is_connected(self) -> bool:
