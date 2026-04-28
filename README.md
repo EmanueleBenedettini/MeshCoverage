@@ -1,84 +1,84 @@
 # MeshCoverage
 
-**MeshCoverage** è un sistema completo per il calcolo e la visualizzazione delle aree di copertura radio di una mesh di antenne Meshtastic. Raccoglie dati dai nodi via MQTT o connessione diretta, calcola la copertura usando dati DEM (Digital Elevation Model) con analisi di visibilità, zona di Fresnel e link budget, e presenta i risultati su mappa interattiva.
+**MeshCoverage** is a complete system for calculating and visualising radio coverage areas of a Meshtastic antenna mesh. It collects data from nodes via MQTT or direct connection, calculates coverage using DEM (Digital Elevation Model) data with visibility analysis, Fresnel zone and link budget calculations, and presents results on an interactive map.
 
 ---
 
-## Architettura
+## Architecture
 
 ```
 MeshCoverage/
-├── proto/                   # Definizioni Protobuf
-├── scripts/                 # Script di utilità e scheduling
+├── proto/                   # Protobuf definitions
+├── scripts/                 # Utility and scheduling scripts
 ├── src/
-│   ├── config.py            # Configurazione centralizzata
-│   ├── database.py          # Gestione database nodi JSON
-│   ├── models/              # Modelli dati
-│   ├── input/               # Servizio acquisizione dati Meshtastic
-│   ├── processing/          # Pipeline di calcolo copertura
-│   ├── api/                 # API REST FastAPI
-│   └── web/                 # Frontend web (Leaflet.js)
+│   ├── config.py            # Centralised configuration
+│   ├── database.py          # Node JSON database management
+│   ├── models/              # Data models
+│   ├── input/               # Meshtastic data acquisition service
+│   ├── processing/          # Coverage calculation pipeline
+│   ├── api/                 # FastAPI REST API
+│   └── web/                 # Web frontend (Leaflet.js)
 └── data/
-    ├── nodes/               # Database nodi (JSON)
-    ├── dem/                 # File DEM (GeoTIFF) - gestiti dall'admin
-    ├── coverage/            # Risultati copertura per nodo (.npz)
-    ├── heatmaps/            # Heatmap GeoJSON per freq/preset
-    └── links/               # Connessioni inter-nodo (JSON)
+    ├── nodes/               # Node database (JSON)
+    ├── dem/                 # DEM files (GeoTIFF) - managed by admin
+    ├── coverage/            # Coverage results per node (.npz)
+    ├── heatmaps/            # GeoJSON heatmaps by frequency/preset
+    └── links/               # Inter-node connections (JSON)
 ```
 
-## Componenti principali
+## Main Components
 
-### 1. INPUT — Acquisizione Dati Meshtastic
-Servizio che si connette alla rete Meshtastic tramite:
-- **MQTT**: broker configurabile (es. `mqtt.meshtastic.org`)
-- **TCP diretto**: connessione al nodo gateway via IP:porta (default 4403)
+### 1. INPUT — Meshtastic Data Acquisition
+Service that connects to the Meshtastic network via:
+- **MQTT**: configurable broker (e.g. `mqtt.meshtastic.org`)
+- **Direct TCP**: connection to gateway node via IP:port (default 4403)
 
-Analizza i pacchetti ricevuti e aggiorna il database nodi JSON con:
-- Identificativo (`!aabbccdd`), nome breve/lungo, posizione GPS, altezza
-- Frequenza (433/868/915 MHz), modem preset
-- Parametri antenna (opzionali, inseriti manualmente)
+Parses received packets and updates the JSON node database with:
+- Identifier (`!aabbccdd`), short/long name, GPS position, altitude
+- Frequency (433/868/915 MHz), modem preset
+- Antenna parameters (optional, manually entered)
 
-### 2. PROCESSING — Calcolo Copertura
-Eseguito periodicamente (default: ogni 24h), calcola per ogni nodo completo:
-- **ERP** (Effective Radiated Power) con warning se >+27 dBm
-- **Link budget** e distanza massima per ogni modem preset
-- **Viewshed** (analisi di visibilità) su dati DEM, parallelizzata su tutti i core
-- **Zona di Fresnel** per ogni punto visibile, con ricevitore a 1.5m
-- **Heatmap GeoJSON** aggregate per frequenza e modem preset
-- **Mappa connessioni** tra nodi in visibilità diretta
+### 2. PROCESSING — Coverage Calculation
+Executed periodically (default: every 24h), calculates for each complete node:
+- **ERP** (Effective Radiated Power) with warning if >+27 dBm
+- **Link budget** and maximum distance for each modem preset
+- **Viewshed** (visibility analysis) on DEM data, parallelised across all cores
+- **Fresnel zone** for each visible point, with receiver at 1.5m
+- **GeoJSON heatmaps** aggregated by frequency and modem preset
+- **Connection map** between nodes in direct line of sight
 
-### 3. VISUALIZZAZIONE — Web UI + API REST
-Interfaccia web su OpenStreetMap con:
-- Selezione frequenza e modem preset
-- Heatmap di copertura aggregata
-- Linee di connessione diretta tra nodi
-- Pannello dettaglio nodo con diagramma di radiazione
-- Avvio manuale computazione (globale o per singolo nodo)
-- Editor database nodi
+### 3. VISUALISATION — Web UI + REST API
+Web interface on OpenStreetMap with:
+- Frequency and modem preset selection
+- Aggregated coverage heatmap
+- Direct connection lines between nodes
+- Node detail panel with radiation diagram
+- Manual computation start (global or per node)
+- Node database editor
 
-API REST documentata automaticamente su `/api/docs`
+REST API automatically documented at `/api/docs`
 
 ---
 
 ## Quickstart
 
-Vedi [INSTALL.md](INSTALL.md) per le istruzioni complete.
+See [INSTALL.md](INSTALL.md) for complete instructions.
 
 ```bash
 git clone https://github.com/your-org/meshcoverage.git
 cd MeshCoverage
 cp .env.example .env
-# Editare .env con la propria configurazione
+# Edit .env with your configuration
 docker-compose up -d
 ```
 
-L'interfaccia web sarà disponibile su `http://localhost:8000`
+The web interface will be available at `http://localhost:8000`
 
 ---
 
-## Formati dati
+## Data Formats
 
-### Nodo (nodes/nodes.json)
+### Node (nodes/nodes.json)
 ```json
 {
   "!aabbccdd": {
@@ -105,9 +105,9 @@ L'interfaccia web sarà disponibile su `http://localhost:8000`
 ```
 
 ### Heatmap (heatmaps/heatmap_868_MEDIUM_FAST.geojson)
-GeoJSON FeatureCollection con proprietà `link_budget_dbm` per ogni punto.
+GeoJSON FeatureCollection with `link_budget_dbm` property for each point.
 
-### Connessioni (links/links_868_MEDIUM_FAST.json)
+### Connections (links/links_868_MEDIUM_FAST.json)
 ```json
 [
   {
