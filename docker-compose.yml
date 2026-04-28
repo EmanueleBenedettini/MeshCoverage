@@ -1,0 +1,57 @@
+version: "3.9"
+
+services:
+
+  # ── Web Server + API ──────────────────────────────────────────────────────
+  web:
+    build: .
+    container_name: meshcoverage-web
+    restart: unless-stopped
+    ports:
+      - "${MESHCOVERAGE_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    environment:
+      - MESHCOVERAGE_HOST=0.0.0.0
+      - MESHCOVERAGE_PORT=8000
+    command: >
+      uvicorn meshcoverage.api.app:app
+      --host 0.0.0.0
+      --port 8000
+      --workers 2
+      --log-level info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Data Acquisition Service ────────────────────────────────────────────
+  input:
+    build: .
+    container_name: meshcoverage-input
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    command: python -m meshcoverage.input.service
+    depends_on:
+      web:
+        condition: service_healthy
+
+  # ── Periodic Calculation Scheduler ───────────────────────────────────────────
+  scheduler:
+    build: .
+    container_name: meshcoverage-scheduler
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    command: python scripts/scheduler.py
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  data:
