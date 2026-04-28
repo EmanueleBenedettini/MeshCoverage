@@ -4,22 +4,22 @@ package meshcoverage;
 
 option python_package = "meshcoverage.proto";
 
-// Connessione diretta tra due nodi
+// Direct connection between two nodes
 message NodeLink {
   string node_a_id        = 1;
   string node_b_id        = 2;
   uint32 frequency_mhz    = 3;
   string modem_preset     = 4;
   float  distance_km      = 5;
-  bool   los              = 6;   // Line of sight disponibile
-  bool   fresnel_ok       = 7;   // Zona di Fresnel libera
+  bool   los              = 6;   // Line of sight available
+  bool   fresnel_ok       = 7;   // Fresnel zone clear
   float  link_budget_a_to_b = 8; // Link budget A→B (dB)
   float  link_budget_b_to_a = 9; // Link budget B→A (dB)
-  float  min_link_budget  = 10;  // min(A→B, B→A) - rappresenta il link reale
+  float  min_link_budget  = 10;  // min(A→B, B→A) - represents the actual link
   string computed_at      = 11;
 }
 
-// Database delle connessioni
+// Connection database
 message LinkDatabase {
   repeated NodeLink links = 1;
   uint32 frequency_mhz    = 2;

@@ -4,35 +4,35 @@ package meshcoverage;
 
 option python_package = "meshcoverage.proto";
 
-// Singolo punto di copertura calcolato
+// Single calculated coverage point
 message CoveragePoint {
-  double lat           = 1;  // Latitudine
-  double lon           = 2;  // Longitudine
-  float link_budget_db = 3;  // Margine link budget (dB)
-  float distance_km    = 4;  // Distanza dal nodo (km)
-  bool  los            = 5;  // Line of sight disponibile
-  bool  fresnel_ok     = 6;  // Prima zona di Fresnel libera
+  double lat           = 1;  // Latitude
+  double lon           = 2;  // Longitude
+  float link_budget_db = 3;  // Link budget margin (dB)
+  float distance_km    = 4;  // Distance from node (km)
+  bool  los            = 5;  // Line of sight available
+  bool  fresnel_ok     = 6;  // First Fresnel zone clear
 }
 
-// Metadati del calcolo di copertura di un nodo
+// Coverage calculation metadata for a node
 message CoverageMetadata {
   string node_id       = 1;
   string computed_at   = 2;  // ISO8601 timestamp
   uint32 frequency_mhz = 3;
   string modem_preset  = 4;
-  float  erp_dbm       = 5;  // ERP calcolato
-  bool   erp_warning   = 6;  // True se ERP > +27 dBm
-  float  max_range_km  = 7;  // Distanza massima teorica (LOS libero)
+  float  erp_dbm       = 5;  // Calculated ERP
+  bool   erp_warning   = 6;  // True if ERP > +27 dBm
+  float  max_range_km  = 7;  // Maximum theoretical distance (free LOS)
   float  sensitivity_dbm = 8;
-  uint32 point_count   = 9;  // Numero punti coperti
-  string dem_files     = 10; // File DEM utilizzati (CSV)
+  uint32 point_count   = 9;  // Number of covered points
+  string dem_files     = 10; // DEM files used (CSV)
 }
 
-// Heatmap aggregata per frequenza + preset
+// Aggregated heatmap for frequency + preset
 message HeatmapMetadata {
   uint32 frequency_mhz = 1;
   string modem_preset  = 2;
   string generated_at  = 3;
-  uint32 node_count    = 4;  // Nodi inclusi nella heatmap
-  string geojson_path  = 5;  // Percorso file GeoJSON
+  uint32 node_count    = 4;  // Nodes included in heatmap
+  string geojson_path  = 5;  // GeoJSON file path
 }
