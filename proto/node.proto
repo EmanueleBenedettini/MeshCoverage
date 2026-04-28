@@ -38,21 +38,38 @@ enum ModemPreset {
   VERY_LONG_SLOW = 8;
 }
 
+enum Role {
+      CLIENT = 0;
+      CLIENT_MUTE = 1;
+      ROUTER = 2;
+      ROUTER_CLIENT = 3 [deprecated = true];
+      REPEATER = 4 [deprecated = true];
+      TRACKER = 5;
+      SENSOR = 6;
+      TAK = 7;
+      CLIENT_HIDDEN = 8;
+      LOST_AND_FOUND = 9;
+      TAK_TRACKER = 10;
+      ROUTER_LATE = 11;
+      CLIENT_BASE = 12;
+    }
+
 // Meshtastic node with all parameters
 message Node {
   string id              = 1;   // E.g. "!aabbccdd"
   string short_name      = 2;
   string long_name       = 3;
-  string hardware_model  = 4;
-  string firmware        = 5;
-  Position position      = 6;
-  float ground_height_m  = 7;   // Antenna height above ground (metres)
-  uint32 frequency_mhz   = 8;   // 433, 868, 915
-  ModemPreset modem_preset = 9;
-  AntennaParams antenna  = 10;
-  string last_seen       = 11;  // ISO8601 timestamp
-  string notes           = 12;
-  bool data_complete     = 13;  // True if has position + frequency + antenna
+  Role role              = 4;   // ONLY ROUTER, ROUTER_LATE and CLIENT_BASE should be considered for automatic coverage calculations
+  string hardware_model  = 5;
+  string firmware        = 6;
+  Position position      = 7;
+  float ground_height_m  = 8;   // Antenna height above ground (metres)
+  uint32 frequency_mhz   = 9;   // 433, 868, 915
+  ModemPreset modem_preset = 10;
+  AntennaParams antenna  = 11;
+  string last_seen       = 12;  // ISO8601 timestamp
+  string notes           = 13;
+  bool data_complete     = 14;  // True if has position + frequency + antenna
 }
 
 // Collection of nodes
