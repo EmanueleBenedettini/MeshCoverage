@@ -122,5 +122,5 @@ GeoJSON FeatureCollection with `link_budget_dbm` property for each point.
 
 ---
 
-## Licenza
+## Licence
 GPL-3.0 license 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Scheduler per l'esecuzione periodica del calcolo di copertura.
-Legge il cron schedule dalla configurazione e lancia coverage_calculator.
+Scheduler for periodic execution of coverage calculation.
+Reads the cron schedule from configuration and launches coverage_calculator.
 """
 import logging
 import subprocess
@@ -24,8 +24,8 @@ log = logging.getLogger("meshcoverage.scheduler")
 
 
 def run_full_computation():
-    """Esegue il calcolo di copertura per tutti i nodi."""
-    log.info("Avvio calcolo copertura schedulato...")
+    """Executes coverage calculation for all nodes."""
+    log.info("Starting scheduled coverage calculation...")
     result = subprocess.run(
         [sys.executable, "-m", "meshcoverage.processing.coverage_calculator", "--all"],
         cwd=str(project_root),
@@ -33,15 +33,15 @@ def run_full_computation():
         text=True
     )
     if result.returncode == 0:
-        log.info("Calcolo completato con successo")
+        log.info("Calculation completed successfully")
     else:
-        log.error(f"Calcolo fallito (exit {result.returncode}):\n{result.stderr}")
+        log.error(f"Calculation failed (exit {result.returncode}):\n{result.stderr}")
 
 
 def main():
     scheduler = BlockingScheduler()
 
-    # Parsing del cron schedule dalla config (es. "0 3 * * *")
+    # Parse cron schedule from config (e.g. "0 3 * * *")
     cron_parts = settings.compute_schedule.split()
     if len(cron_parts) == 5:
         minute, hour, day, month, day_of_week = cron_parts
@@ -50,21 +50,21 @@ def main():
             day=day, month=month, day_of_week=day_of_week
         )
     else:
-        log.warning(f"Schedule non valido '{settings.compute_schedule}', uso default 3:00")
+        log.warning(f"Invalid schedule '{settings.compute_schedule}', using default 3:00")
         trigger = CronTrigger(hour=3, minute=0)
 
     scheduler.add_job(run_full_computation, trigger, id="coverage_compute")
-    log.info(f"Scheduler avviato. Schedule: {settings.compute_schedule}")
+    log.info(f"Scheduler started. Schedule: {settings.compute_schedule}")
 
-    # Esegui subito al primo avvio se richiesto
+    # Run immediately on first start if requested
     if "--run-now" in sys.argv:
-        log.info("--run-now specificato, esecuzione immediata...")
+        log.info("--run-now specified, running immediately...")
         run_full_computation()
 
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
-        log.info("Scheduler fermato.")
+        log.info("Scheduler stopped.")
 
 
 if __name__ == "__main__":
