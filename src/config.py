@@ -1,6 +1,6 @@
 """
-Configurazione centralizzata MeshCoverage.
-Tutte le impostazioni sono lette da variabili d'ambiente o file .env.
+Centralised MeshCoverage configuration.
+All settings are read from environment variables or .env file.
 """
 from pathlib import Path
 from typing import Optional
@@ -16,13 +16,13 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Server web
+    # Web server
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000)
     secret_key: str = Field(default="changeme-please-set-in-env")
     log_level: str = Field(default="INFO")
 
-    # Directory dati
+    # Data directories
     data_dir: Path = Field(default=Path("./data"))
 
     # MQTT
@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     mqtt_topic: str = Field(default="msh/#")
     mqtt_tls: bool = Field(default=False)
 
-    # Connessione diretta Meshtastic
+    # Direct Meshtastic connection
     direct_enabled: bool = Field(default=False)
     direct_host: str = Field(default="localhost")
     direct_port: int = Field(default=4403)
@@ -44,18 +44,18 @@ class Settings(BaseSettings):
 
     # DEM
     dem_dir: Path = Field(default=Path("./data/dem"))
-    dem_resolution: int = Field(default=30)   # metri
+    dem_resolution: int = Field(default=30)   # metres
 
-    # Calcolo copertura
-    max_workers: int = Field(default=0)       # 0 = auto (tutti i core)
-    max_range_km: float = Field(default=50.0) # Distanza massima analisi
-    receiver_height_m: float = Field(default=1.5)   # Altezza ricevitore
-    receiver_gain_dbi: float = Field(default=2.15)  # Guadagno antenna ricevente
-    min_link_budget_db: float = Field(default=0.0)  # Margine minimo per "copertura"
-    erp_warning_dbm: float = Field(default=27.0)    # Soglia ERP warning
+    # Coverage calculation
+    max_workers: int = Field(default=0)       # 0 = auto (all cores)
+    max_range_km: float = Field(default=50.0) # Maximum analysis distance
+    receiver_height_m: float = Field(default=1.5)   # Receiver height
+    receiver_gain_dbi: float = Field(default=2.15)  # Receiver antenna gain
+    min_link_budget_db: float = Field(default=0.0)  # Minimum margin for "coverage"
+    erp_warning_dbm: float = Field(default=27.0)    # ERP warning threshold
 
     # Heatmap
-    heatmap_resolution_m: float = Field(default=100.0)  # risoluzione grid heatmap
+    heatmap_resolution_m: float = Field(default=100.0)  # heatmap grid resolution
 
     @property
     def nodes_file(self) -> Path:
@@ -74,7 +74,7 @@ class Settings(BaseSettings):
         return self.data_dir / "links"
 
     def ensure_dirs(self):
-        """Crea tutte le directory necessarie se non esistono."""
+        """Creates all necessary directories if they do not exist."""
         for d in [
             self.data_dir / "nodes",
             self.coverage_dir,
