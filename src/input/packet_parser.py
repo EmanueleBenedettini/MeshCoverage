@@ -1,13 +1,13 @@
 """
-Parser pacchetti Meshtastic.
-Estrae informazioni sui nodi dai vari tipi di pacchetto.
+Meshtastic packet parser.
+Extracts node information from various packet types.
 """
 from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from src.models.node import Node, Position, MODEM_PRESETS
+from meshcoverage.models.node import Node, Position, MODEM_PRESETS
 
 log = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ HARDWARE_MODELS = {
     255: "PRIVATE_HW",
 }
 
-# Mapping preset string → int e viceversa
+# Mapping preset string → int and vice versa
 PRESET_INT_TO_STR = {
     0: "SHORT_TURBO", 1: "SHORT_FAST", 2: "SHORT_SLOW",
     3: "MEDIUM_FAST", 4: "MEDIUM_SLOW", 5: "LONG_FAST",
@@ -34,7 +34,7 @@ PRESET_INT_TO_STR = {
 }
 PRESET_STR_TO_INT = {v: k for k, v in PRESET_INT_TO_STR.items()}
 
-# Mapping frequenza canale → MHz
+# Mapping channel frequency → MHz
 FREQ_CHANNEL_MAPS = {
     "LongFast": 868, "LongSlow": 868, "LongMod": 868,
     "MedFast": 868, "MedSlow": 868,
@@ -43,13 +43,13 @@ FREQ_CHANNEL_MAPS = {
 
 
 def node_id_to_hex(node_num: int) -> str:
-    """Converte numero nodo intero in stringa !aabbccdd."""
+    """Converts integer node number to string !aabbccdd format."""
     return f"!{node_num:08x}"
 
 
 def parse_node_info(packet: dict) -> Optional[Node]:
     """
-    Estrae dati nodo da un pacchetto NodeInfo / portnum=NODEINFO_APP.
+    Extracts node data from a NodeInfo packet / portnum=NODEINFO_APP.
     """
     try:
         decoded = packet.get("decoded", {})
@@ -76,7 +76,7 @@ def parse_node_info(packet: dict) -> Optional[Node]:
 
 def parse_position(packet: dict) -> Optional[Node]:
     """
-    Estrae posizione GPS da un pacchetto Position / portnum=POSITION_APP.
+    Extracts GPS position from a Position packet / portnum=POSITION_APP.
     """
     try:
         decoded = packet.get("decoded", {})
@@ -106,7 +106,7 @@ def parse_position(packet: dict) -> Optional[Node]:
 
 def parse_device_metrics(packet: dict) -> Optional[Node]:
     """
-    Estrae metriche dispositivo (batteria, uptime) — limitato ma salviamo last_seen.
+    Extracts device metrics (battery, uptime) — limited but saves last_seen.
     """
     try:
         from_num = packet.get("from", 0)
@@ -123,8 +123,8 @@ def parse_device_metrics(packet: dict) -> Optional[Node]:
 
 def parse_channel_config(packet: dict, node_id: str) -> Optional[Node]:
     """
-    Estrae configurazione canale (frequenza, modem preset) se disponibile.
-    I pacchetti di configurazione non sono sempre presenti nel flusso MQTT pubblico.
+    Extracts channel configuration (frequency, modem preset) if available.
+    Configuration packets are not always present in the public MQTT stream.
     """
     try:
         decoded = packet.get("decoded", {})
@@ -134,11 +134,11 @@ def parse_channel_config(packet: dict, node_id: str) -> Optional[Node]:
         if not lora:
             return None
 
-        # Estrai preset
+        # Extract preset
         preset_int = lora.get("modemPreset", lora.get("modem_preset", 3))
         preset_str = PRESET_INT_TO_STR.get(preset_int, "MEDIUM_FAST")
 
-        # Frequenza: usa region o frequenza override
+        # Frequency: use region or frequency override
         region = lora.get("region", 0)
         freq_override = lora.get("overrideFrequency", lora.get("override_frequency", 0))
 
@@ -163,8 +163,8 @@ def parse_channel_config(packet: dict, node_id: str) -> Optional[Node]:
 
 def parse_mqtt_packet(raw_packet: dict) -> list[Node]:
     """
-    Analizza un pacchetto MQTT Meshtastic e restituisce i nodi estratti.
-    Un singolo pacchetto può aggiornare più aspetti di un nodo.
+    Analyses a Meshtastic MQTT packet and returns extracted nodes.
+    A single packet can update multiple aspects of a node.
     """
     nodes = []
     portnum = raw_packet.get("decoded", {}).get("portnum", "")
@@ -181,13 +181,13 @@ def parse_mqtt_packet(raw_packet: dict) -> list[Node]:
         if n:
             nodes.append(n)
 
-    # Telemetria dispositivo
+    # Device telemetry
     if portnum in ("TELEMETRY_APP", 67):
         n = parse_device_metrics(raw_packet)
         if n:
             nodes.append(n)
 
-    # Qualsiasi pacchetto aggiorna last_seen del mittente
+    # Any packet updates sender's last_seen
     from_num = raw_packet.get("from", 0)
     if from_num and not nodes:
         nodes.append(Node(
@@ -200,7 +200,7 @@ def parse_mqtt_packet(raw_packet: dict) -> list[Node]:
 
 def parse_meshtastic_api_node(api_node: dict) -> Optional[Node]:
     """
-    Parsa un nodo dalla risposta dell'API Python meshtastic
+    Parses a node from the meshtastic Python API response
     (mesh_interface.nodes).
     """
     try:
