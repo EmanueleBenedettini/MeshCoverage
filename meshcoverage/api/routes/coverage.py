@@ -23,13 +23,13 @@ import numpy as np
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from meshmonitor import database
-from meshmonitor.config import settings
-from meshmonitor.api.dependencies import get_calculator
-from meshmonitor.api.websocket import (
+from meshcoverage import database
+from meshcoverage.config import settings
+from meshcoverage.api.dependencies import get_calculator
+from meshcoverage.api.websocket import (
     notify_compute_started, notify_compute_done, notify_compute_error
 )
-from meshmonitor.processing.coverage_calculator import CoverageCalculator
+from meshcoverage.processing.coverage_calculator import CoverageCalculator
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/coverage", tags=["coverage"])
@@ -55,7 +55,7 @@ class ComputeResponse(BaseModel):
 
 def _viewshed_to_geojson(node_id: str) -> Optional[dict]:
     """Converte il file NPZ di copertura in GeoJSON FeatureCollection."""
-    from meshmonitor.processing.viewshed import load_viewshed
+    from meshcoverage.processing.viewshed import load_viewshed
 
     safe_id = node_id.lstrip("!").lower()
     path = settings.coverage_dir / f"coverage_{safe_id}.npz"
@@ -227,7 +227,7 @@ async def get_node_coverage_geojson(
     Restituisce la copertura del nodo come GeoJSON FeatureCollection.
     Ogni feature è un punto con proprietà link_budget_db, distance_m, los, fresnel_ok.
     """
-    from meshmonitor.processing.viewshed import load_viewshed
+    from meshcoverage.processing.viewshed import load_viewshed
 
     safe_id = node_id.lstrip("!").lower()
     path = settings.coverage_dir / f"coverage_{safe_id}.npz"

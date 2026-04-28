@@ -7,8 +7,8 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Optional
 
-from meshmonitor.processing.coverage_calculator import CoverageCalculator
-from meshmonitor.input.service import InputService
+from meshcoverage.processing.coverage_calculator import CoverageCalculator
+from meshcoverage.input.service import InputService
 
 # ---------------------------------------------------------------------------
 # Singleton coverage calculator

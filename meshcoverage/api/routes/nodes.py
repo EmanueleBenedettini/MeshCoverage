@@ -19,9 +19,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from meshmonitor import database
-from meshmonitor.models.node import Node, NodeUpdate, AntennaParams, Position, MODEM_PRESETS
-from meshmonitor.api.websocket import notify_node_updated
+from meshcoverage import database
+from meshcoverage.models.node import Node, NodeUpdate, AntennaParams, Position, MODEM_PRESETS
+from meshcoverage.api.websocket import notify_node_updated
 
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 
@@ -50,7 +50,7 @@ class NodeResponse(BaseModel):
     def from_node(cls, n: Node) -> "NodeResponse":
         erp_warn = None
         if n.antenna and n.antenna.tx_power_dbm and n.antenna.gain_dbi:
-            from meshmonitor.processing.link_budget import check_erp_warning
+            from meshcoverage.processing.link_budget import check_erp_warning
             _, erp_warn = check_erp_warning(n.antenna.tx_power_dbm, n.antenna.gain_dbi)
         return cls(
             **n.model_dump(mode="json"),
@@ -237,6 +237,6 @@ async def get_node_link_budget(node_id: str):
     if not node.is_complete:
         raise HTTPException(status_code=422, detail="Dati nodo incompleti per il calcolo del link budget")
 
-    from meshmonitor.processing.link_budget import compute_node_link_budget_summary
+    from meshcoverage.processing.link_budget import compute_node_link_budget_summary
     summary = compute_node_link_budget_summary(node)
     return summary

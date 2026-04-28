@@ -17,9 +17,9 @@ from typing import Optional
 
 import numpy as np
 
-from meshmonitor.config import settings
-from meshmonitor import database
-from meshmonitor.processing.viewshed import load_viewshed
+from meshcoverage.config import settings
+from meshcoverage import database
+from meshcoverage.processing.viewshed import load_viewshed
 
 log = logging.getLogger(__name__)
 

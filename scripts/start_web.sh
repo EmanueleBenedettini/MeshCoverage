@@ -42,5 +42,5 @@ if [ "$#" -gt 0 ]; then
   exec "$@"
 else
   echo "Avvio servizio web: uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload"
-  exec uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
+  exec uvicorn meshcoverage.api.app:app --host 0.0.0.0 --port 8000 --reload
 fi

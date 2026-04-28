@@ -14,12 +14,12 @@ from datetime import datetime, timezone
 from itertools import combinations
 from collections import defaultdict
 
-from meshmonitor.config import settings
-from meshmonitor import database
-from meshmonitor.models.node import Node
-from meshmonitor.processing.dem_handler import get_dem_handler, haversine_m, bearing_deg
-from meshmonitor.processing.fresnel import check_los, check_fresnel_clearance
-from meshmonitor.processing.link_budget import calculate_link_budget
+from meshcoverage.config import settings
+from meshcoverage import database
+from meshcoverage.models.node import Node
+from meshcoverage.processing.dem_handler import get_dem_handler, haversine_m, bearing_deg
+from meshcoverage.processing.fresnel import check_los, check_fresnel_clearance
+from meshcoverage.processing.link_budget import calculate_link_budget
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ def _compute_link(node_a: Node, node_b: Node, dem) -> dict | None:
     )
 
     import numpy as np
-    from meshmonitor.processing.dem_handler import earth_bulge_m
+    from meshcoverage.processing.dem_handler import earth_bulge_m
     elevations_corr = np.where(
         np.isnan(elevations),
         np.nan,
