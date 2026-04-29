@@ -27,14 +27,14 @@ from meshcoverage import database
 from meshcoverage.config import settings
 from meshcoverage.api.dependencies import get_calculator
 from meshcoverage.api.websocket import (
-    notify_compute_started, notify_compute_done, notify_compute_error
+    notify_compute_started, notify_compute_progress,
+    notify_compute_done, notify_compute_error,
 )
 from meshcoverage.processing.coverage_calculator import CoverageCalculator
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/coverage", tags=["coverage"])
 
-# Thread pool per non bloccare l'event loop durante i calcoli pesanti
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="coverage-worker")
 _compute_running = False
 
@@ -64,7 +64,6 @@ def _viewshed_to_geojson(node_id: str) -> Optional[dict]:
     if data is None or len(data["lats"]) == 0:
         return None
 
-    # Filtra per link budget minimo
     mask = data["link_budget"] >= settings.min_link_budget_db
 
     features = []
@@ -96,13 +95,31 @@ def _viewshed_to_geojson(node_id: str) -> Optional[dict]:
     }
 
 
+def _make_ws_progress_cb(loop: asyncio.AbstractEventLoop):
+    """
+    Returns a thread-safe progress callback that forwards updates to
+    connected WebSocket clients via notify_compute_progress.
+    Called from inside the ThreadPoolExecutor worker thread.
+    """
+    def _cb(node_id: str, done: int, total: int):
+        asyncio.run_coroutine_threadsafe(
+            notify_compute_progress(node_id, done, total),
+            loop,
+        )
+    return _cb
+
+
 async def _run_compute_all(calc: CoverageCalculator, force: bool):
     global _compute_running
     _compute_running = True
     await notify_compute_started(None)
     try:
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(_executor, lambda: calc.compute_all(force=force))
+        progress_cb = _make_ws_progress_cb(loop)
+        result = await loop.run_in_executor(
+            _executor,
+            lambda: calc.compute_all(force=force, node_progress_callback=progress_cb),
+        )
         await notify_compute_done(None, {
             "total": result.get("total"),
             "computed": result.get("computed"),
@@ -122,8 +139,10 @@ async def _run_compute_node(calc: CoverageCalculator, node_id: str, force: bool)
             await notify_compute_error(node_id, "Nodo non trovato")
             return
         loop = asyncio.get_event_loop()
+        progress_cb = _make_ws_progress_cb(loop)
         result = await loop.run_in_executor(
-            _executor, lambda: calc.compute_node(node, force=force)
+            _executor,
+            lambda: calc.compute_node(node, force=force, progress_callback=progress_cb),
         )
         await notify_compute_done(node_id, result.get("metadata"))
     except Exception as e:
@@ -138,18 +157,13 @@ async def _run_compute_node(calc: CoverageCalculator, node_id: str, force: bool)
 @router.post("/compute/all", response_model=ComputeResponse)
 async def compute_all(
     background_tasks: BackgroundTasks,
-    force: bool = Query(default=False, description="Forza ricalcolo anche se già presente"),
+    force: bool = Query(default=False),
     calc: CoverageCalculator = Depends(get_calculator),
 ):
-    """
-    Avvia il calcolo di copertura per tutti i nodi completi.
-    Il calcolo viene eseguito in background.
-    Usa il WebSocket /ws per ricevere aggiornamenti di progresso.
-    """
+    """Avvia il calcolo di copertura per tutti i nodi completi (background)."""
     global _compute_running
     if _compute_running:
         return ComputeResponse(started=False, message="Calcolo già in corso")
-
     background_tasks.add_task(_run_compute_all, calc, force)
     return ComputeResponse(started=True, message="Calcolo avviato in background")
 
@@ -167,18 +181,15 @@ async def compute_node(
         raise HTTPException(status_code=404, detail=f"Nodo {node_id!r} non trovato")
     if not node.is_complete:
         raise HTTPException(status_code=422, detail="Dati nodo incompleti per il calcolo")
-
     background_tasks.add_task(_run_compute_node, calc, node_id, force)
-    return ComputeResponse(started=True, message=f"Calcolo avviato per {node_id}", node_id=node_id)
+    return ComputeResponse(
+        started=True, message=f"Calcolo avviato per {node_id}", node_id=node_id
+    )
 
 
 @router.get("/status")
 async def get_global_status(calc: CoverageCalculator = Depends(get_calculator)):
-    """Stato del calcolo globale."""
-    return {
-        "running": _compute_running,
-        "nodes": calc.get_status(),
-    }
+    return {"running": _compute_running, "nodes": calc.get_status()}
 
 
 @router.get("/status/{node_id}")
@@ -186,13 +197,11 @@ async def get_node_status(
     node_id: str,
     calc: CoverageCalculator = Depends(get_calculator),
 ):
-    """Stato del calcolo per un nodo specifico."""
     return calc.get_status(node_id)
 
 
 @router.get("/available")
 async def list_available():
-    """Lista dei nodi che hanno un calcolo di copertura salvato."""
     results = []
     for meta_file in settings.coverage_dir.glob("metadata_*.json"):
         try:
@@ -207,11 +216,12 @@ async def list_available():
 
 @router.get("/{node_id}/metadata")
 async def get_node_metadata(node_id: str):
-    """Metadati dell'ultimo calcolo per un nodo."""
     safe_id = node_id.lstrip("!").lower()
     meta_path = settings.coverage_dir / f"metadata_{safe_id}.json"
     if not meta_path.exists():
-        raise HTTPException(status_code=404, detail="Metadati non trovati. Eseguire prima il calcolo.")
+        raise HTTPException(
+            status_code=404, detail="Metadati non trovati. Eseguire prima il calcolo."
+        )
     with open(meta_path) as f:
         return json.load(f)
 
@@ -219,14 +229,11 @@ async def get_node_metadata(node_id: str):
 @router.get("/{node_id}/geojson")
 async def get_node_coverage_geojson(
     node_id: str,
-    min_budget: float = Query(default=None, description="Filtra per link budget minimo (dB)"),
-    los_only: bool = Query(default=False, description="Solo punti in LOS"),
-    fresnel_only: bool = Query(default=False, description="Solo punti con Fresnel ok"),
+    min_budget: float = Query(default=None),
+    los_only: bool = Query(default=False),
+    fresnel_only: bool = Query(default=False),
 ):
-    """
-    Restituisce la copertura del nodo come GeoJSON FeatureCollection.
-    Ogni feature è un punto con proprietà link_budget_db, distance_m, los, fresnel_ok.
-    """
+    """Restituisce la copertura del nodo come GeoJSON FeatureCollection."""
     from meshcoverage.processing.viewshed import load_viewshed
 
     safe_id = node_id.lstrip("!").lower()
@@ -235,12 +242,16 @@ async def get_node_coverage_geojson(
     if not path.exists():
         raise HTTPException(
             status_code=404,
-            detail="Copertura non calcolata. Avviare prima il calcolo."
+            detail="Copertura non calcolata. Avviare prima il calcolo.",
         )
 
     data = load_viewshed(path)
     if data is None or len(data["lats"]) == 0:
-        return {"type": "FeatureCollection", "features": [], "properties": {"node_id": node_id}}
+        return {
+            "type": "FeatureCollection",
+            "features": [],
+            "properties": {"node_id": node_id},
+        }
 
     threshold = min_budget if min_budget is not None else settings.min_link_budget_db
     mask = data["link_budget"] >= threshold

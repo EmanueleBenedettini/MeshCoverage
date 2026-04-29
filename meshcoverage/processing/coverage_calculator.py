@@ -9,7 +9,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import click
 
@@ -30,17 +30,14 @@ log = logging.getLogger(__name__)
 
 
 class CoverageCalculator:
-    """
-    Calcola la copertura radio per i nodi Meshtastic.
-    """
+    """Calcola la copertura radio per i nodi Meshtastic."""
 
     def __init__(self):
         self.dem = get_dem_handler()
         self.n_workers = settings.max_workers if settings.max_workers > 0 else None
-        self._status: dict = {}  # stato computazione per nodo
+        self._status: dict = {}
 
     def _get_coverage_path(self, node_id: str) -> Path:
-        """Percorso file NPZ per la copertura di un nodo."""
         safe_id = node_id.lstrip("!").lower()
         return settings.coverage_dir / f"coverage_{safe_id}.npz"
 
@@ -61,28 +58,32 @@ class CoverageCalculator:
             json.dump(meta, f, indent=2, default=str)
 
     def _needs_recompute(self, node: Node) -> bool:
-        """
-        Determina se è necessario ricalcolare la copertura per un nodo.
-        Ricalcola se: file non esiste, o nodo aggiornato dopo l'ultimo calcolo.
-        """
         meta = self._load_metadata(node.id)
         if meta is None:
             return True
-
-        # Se il nodo ha un last_seen più recente dell'ultimo calcolo
         computed_at_str = meta.get("computed_at")
         if computed_at_str and node.last_seen:
             computed_at = datetime.fromisoformat(computed_at_str)
             if node.last_seen > computed_at:
                 return True
-
         coverage_path = self._get_coverage_path(node.id)
         return not coverage_path.exists()
 
-    def compute_node(self, node: Node, force: bool = False) -> dict:
+    def compute_node(
+        self,
+        node: Node,
+        force: bool = False,
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
+    ) -> dict:
         """
         Calcola la copertura per un singolo nodo.
-        Returns: dizionario con risultati e metadati.
+
+        Args:
+            node: nodo da calcolare
+            force: forza ricalcolo anche se già presente
+            progress_callback: callable(node_id, done, total) chiamato ogni 100 punti
+        Returns:
+            dizionario con risultati e metadati
         """
         if not node.is_complete:
             log.warning(f"Nodo {node.id} non completo, skip")
@@ -100,28 +101,24 @@ class CoverageCalculator:
         if erp_warning:
             log.warning(
                 f"⚠ ATTENZIONE: Nodo {node.id} — ERP={erp:.1f}dBm supera il limite "
-                f"di +{settings.erp_warning_dbm}dBm! Verificare conformità normativa."
+                f"di +{settings.erp_warning_dbm}dBm!"
             )
 
-        # Calcola distanza massima teorica
         max_range = max_range_km(
             node.frequency_mhz, node.modem_preset,
             ant.tx_power_dbm, ant.gain_dbi
         )
-        # Limita alla distanza massima configurata
         max_range_actual = min(max_range, settings.max_range_km)
         log.info(f"Distanza massima teorica: {max_range:.1f}km → uso {max_range_actual:.1f}km")
 
-        # Altitudine antenna
         ant_elev = self.dem.get_elevation(node.position.lat, node.position.lon)
         if ant_elev is None:
-            log.error(f"Nessun dato DEM per nodo {node.id} a ({node.position.lat:.4f}, {node.position.lon:.4f})")
+            log.error(f"Nessun dato DEM per nodo {node.id}")
             return {"node_id": node.id, "status": "no_dem"}
 
         ant_alt_m = ant_elev + (node.ground_height_m or 3.0)
-        log.info(f"Altitudine antenna: {ant_alt_m:.1f}m slm (terreno={ant_elev:.1f}m + {node.ground_height_m or 3.0}m)")
+        log.info(f"Altitudine antenna: {ant_alt_m:.1f}m slm")
 
-        # Parametri viewshed
         gain_min = ant.gain_min_dbi if ant.gain_min_dbi is not None else ant.gain_dbi - 3
         gain_max = ant.gain_max_dbi if ant.gain_max_dbi is not None else ant.gain_dbi
 
@@ -146,21 +143,28 @@ class CoverageCalculator:
             rx_height_m=settings.receiver_height_m,
         )
 
-        # Aggiorna stato
         self._status[node.id] = {
             "status": "computing",
             "started_at": datetime.now(timezone.utc).isoformat(),
             "progress": 0,
         }
 
-        def progress_cb(done, total):
+        def _internal_progress_cb(done: int, total: int):
             pct = int(100 * done / total) if total > 0 else 0
             self._status[node.id]["progress"] = pct
+            # Forward to external caller (e.g. API route → WebSocket)
+            if progress_callback is not None:
+                try:
+                    progress_callback(node.id, done, total)
+                except Exception:
+                    pass
 
-        # Esegui viewshed
-        results = compute_viewshed(params, n_workers=self.n_workers or 0, progress_callback=progress_cb)
+        results = compute_viewshed(
+            params,
+            n_workers=self.n_workers or 0,
+            progress_callback=_internal_progress_cb,
+        )
 
-        # Salva risultati
         settings.coverage_dir.mkdir(parents=True, exist_ok=True)
         coverage_path = self._get_coverage_path(node.id)
 
@@ -175,7 +179,10 @@ class CoverageCalculator:
             "sensitivity_dbm": MODEM_PRESETS[node.modem_preset]["receiver_sensitivity_dbm"],
             "ant_alt_m": round(ant_alt_m, 2),
             "point_count": len(results),
-            "covered_points": len([r for r in results if r.get("link_budget_db", float("-inf")) >= settings.min_link_budget_db]),
+            "covered_points": len([
+                r for r in results
+                if r.get("link_budget_db", float("-inf")) >= settings.min_link_budget_db
+            ]),
             "duration_s": round(time.time() - start_time, 1),
         }
 
@@ -194,10 +201,17 @@ class CoverageCalculator:
         )
         return {"node_id": node.id, "status": "done", "metadata": metadata}
 
-    def compute_all(self, force: bool = False) -> dict:
+    def compute_all(
+        self,
+        force: bool = False,
+        node_progress_callback: Optional[Callable[[str, int, int], None]] = None,
+    ) -> dict:
         """
         Calcola la copertura per tutti i nodi completi.
-        Poi genera heatmap e mappa connessioni.
+
+        Args:
+            force: forza ricalcolo anche se già presente
+            node_progress_callback: callable(node_id, done, total) per aggiornamenti WS
         """
         settings.ensure_dirs()
         nodes = database.get_complete_nodes()
@@ -211,20 +225,20 @@ class CoverageCalculator:
 
         for node in nodes:
             try:
-                result = self.compute_node(node, force=force)
+                result = self.compute_node(
+                    node, force=force, progress_callback=node_progress_callback
+                )
                 results.append(result)
             except Exception as e:
                 log.error(f"Errore calcolo nodo {node.id}: {e}", exc_info=True)
                 results.append({"node_id": node.id, "status": "error", "error": str(e)})
 
-        # Genera heatmap aggregate
         log.info("=== Generazione heatmap aggregate ===")
         try:
             generate_heatmaps()
         except Exception as e:
             log.error(f"Errore generazione heatmap: {e}", exc_info=True)
 
-        # Calcola connessioni tra nodi
         log.info("=== Calcolo connessioni inter-nodo ===")
         try:
             compute_node_links()
@@ -236,7 +250,6 @@ class CoverageCalculator:
         return {"status": "done", "total": len(nodes), "computed": done, "results": results}
 
     def get_status(self, node_id: str = None) -> dict:
-        """Restituisce lo stato corrente del calcolo."""
         if node_id:
             return self._status.get(node_id, {"status": "idle"})
         return dict(self._status)
@@ -248,7 +261,7 @@ class CoverageCalculator:
 
 @click.command()
 @click.option("--all", "all_nodes", is_flag=True, help="Calcola per tutti i nodi")
-@click.option("--node", "node_id", default=None, help="Calcola per nodo specifico (es. !aabbccdd)")
+@click.option("--node", "node_id", default=None, help="Calcola per nodo specifico")
 @click.option("--force", is_flag=True, help="Forza ricalcolo anche se già presente")
 @click.option("--no-heatmap", is_flag=True, help="Salta generazione heatmap")
 @click.option("--no-links", is_flag=True, help="Salta calcolo connessioni")
@@ -269,7 +282,6 @@ def main(all_nodes, node_id, force, no_heatmap, no_links):
             sys.exit(1)
         result = calc.compute_node(node, force=force)
         click.echo(json.dumps(result, indent=2, default=str))
-
         if not no_heatmap:
             generate_heatmaps()
         if not no_links:
