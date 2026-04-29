@@ -77,6 +77,7 @@ function fillForm(form, node) {
     if (el && val !== null && val !== undefined) el.value = val;
   };
   set('id', node.id);
+  set('role', node.role);
   set('short_name', node.short_name);
   set('long_name', node.long_name);
   if (node.position) {
@@ -116,6 +117,7 @@ async function saveNode() {
 
   const body = {
     id: g('id'),
+    role: g('role'),
     short_name: g('short_name'),
     long_name: g('long_name'),
     frequency_mhz: gi('frequency_mhz'),

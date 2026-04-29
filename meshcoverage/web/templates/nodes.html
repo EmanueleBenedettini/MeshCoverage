@@ -62,6 +62,7 @@
         <tr>
           <th>ID</th>
           <th>Nome</th>
+          <th>Role</th>
           <th>Posizione</th>
           <th>Freq</th>
           <th>Preset</th>
@@ -69,7 +70,7 @@
           <th>ERP</th>
           <th>Ultimo contatto</th>
           <th>Stato</th>
-          <th></th>
+          <th>Azioni</th>
         </tr>
       </thead>
       <tbody id="nodes-tbody">
@@ -88,6 +89,15 @@
               <span class="long-name">{{ node.long_name }}</span>
               {% endif %}
             </div>
+          </td>
+          <td>
+            {% if node.role %}
+              <span class="badge {{ 'badge-ok' if node.role.value in ('ROUTER','ROUTER_LATE','CLIENT_BASE') else 'badge-off' }}">
+                {{ node.role.value }}
+              </span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
           </td>
           <td>
             {% if node.position %}
@@ -139,18 +149,20 @@
             {% endif %}
           </td>
           <td class="row-actions">
-            <button class="btn-icon" onclick="editNode('{{ node.id }}')" title="Modifica">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
-            </button>
-            <button class="btn-icon btn-danger" onclick="deleteNode('{{ node.id }}')" title="Elimina">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/>
-                <path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
-              </svg>
-            </button>
+            <span class="actions">
+              <button class="btn-icon" onclick="editNode('{{ node.id }}')" title="Modifica">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                  <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+              </button>
+              <button class="btn-icon btn-danger" onclick="deleteNode('{{ node.id }}')" title="Elimina">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/>
+                  <path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
+                </svg>
+              </button>
+            </span>
           </td>
         </tr>
         {% else %}
@@ -176,6 +188,16 @@
           <input type="text" name="id" placeholder="!aabbccdd" pattern="![0-9a-f]{8}" required>
         </div>
         <div class="form-group">
+          <label>Role</label>
+          <select name="role">
+            <option value="">— seleziona —</option>
+            <option value="CLIENT">CLIENT</option>
+            <option value="ROUTER">ROUTER</option>
+            <option value="ROUTER_LATE">ROUTER_LATE</option>
+            <option value="CLIENT_BASE">CLIENT_BASE</option>
+          </select>
+        </div>
+        <div class="form-group">
           <label>Nome breve</label>
           <input type="text" name="short_name" placeholder="NODE" maxlength="4">
         </div>
@@ -183,7 +205,6 @@
           <label>Nome lungo</label>
           <input type="text" name="long_name" placeholder="My Mesh Node">
         </div>
-
         <div class="form-group">
           <label>Latitudine</label>
           <input type="number" name="lat" step="0.000001" placeholder="45.000000">

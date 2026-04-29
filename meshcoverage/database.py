@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from meshcoverage.config import settings
-from meshcoverage.models.node import Node, AntennaParams, Position
+from meshcoverage.models.node import Node, AntennaParams, Position, AUTO_COMPUTE_ROLES
 
 log = logging.getLogger(__name__)
 _lock = threading.RLock()
@@ -125,8 +125,15 @@ def delete_node(node_id: str) -> bool:
 
 
 def get_complete_nodes() -> list[Node]:
-    """Returns only nodes with complete data for calculation."""
-    return [n for n in load_all().values() if n.is_complete]
+    """
+    Returns nodes with complete data AND an auto-compute role
+    (ROUTER, ROUTER_LATE, CLIENT_BASE).
+    Nodes with no role set are excluded from automatic calculation.
+    """
+    return [
+        n for n in load_all().values()
+        if n.is_complete and n.role in AUTO_COMPUTE_ROLES
+    ]
 
 
 def get_nodes_by_frequency(freq_mhz: int) -> list[Node]:
