@@ -41,6 +41,23 @@ FREQ_CHANNEL_MAPS = {
     "ShortFast": 868, "ShortSlow": 868, "ShortTurbo": 868,
 }
 
+# Mapping role int → NodeRole string
+ROLE_INT_TO_STR: dict[int, str] = {
+    0:  "CLIENT",
+    1:  "CLIENT_MUTE",
+    2:  "ROUTER",
+    3:  "ROUTER_CLIENT",
+    4:  "REPEATER",
+    5:  "TRACKER",
+    6:  "SENSOR",
+    7:  "TAK",
+    8:  "CLIENT_HIDDEN",
+    9:  "LOST_AND_FOUND",
+    10: "TAK_TRACKER",
+    11: "ROUTER_LATE",
+    12: "CLIENT_BASE",
+}
+
 
 def node_id_to_hex(node_num: int) -> str:
     """Converts integer node number to string !aabbccdd format."""
@@ -48,9 +65,6 @@ def node_id_to_hex(node_num: int) -> str:
 
 
 def parse_node_info(packet: dict) -> Optional[Node]:
-    """
-    Extracts node data from a NodeInfo packet / portnum=NODEINFO_APP.
-    """
     try:
         decoded = packet.get("decoded", {})
         node_info = decoded.get("user", decoded.get("nodeinfo", {}))
@@ -60,8 +74,18 @@ def parse_node_info(packet: dict) -> Optional[Node]:
         if not node_id:
             return None
 
+        # Role can be an int or already a string
+        raw_role = node_info.get("role", None)
+        role_str = None
+        if raw_role is not None:
+            if isinstance(raw_role, int):
+                role_str = ROLE_INT_TO_STR.get(raw_role)
+            elif isinstance(raw_role, str):
+                role_str = raw_role.upper()
+
         return Node(
             id=node_id,
+            role=role_str,
             short_name=node_info.get("shortName") or node_info.get("short_name"),
             long_name=node_info.get("longName") or node_info.get("long_name"),
             hardware_model=HARDWARE_MODELS.get(
@@ -228,8 +252,18 @@ def parse_meshtastic_api_node(api_node: dict) -> Optional[Node]:
             user.get("hwModel", 0), str(user.get("hwModel", "UNKNOWN"))
         )
 
+        # Role
+        raw_role = user.get("role", None)
+        role_str = None
+        if raw_role is not None:
+            if isinstance(raw_role, int):
+                role_str = ROLE_INT_TO_STR.get(raw_role)
+            elif isinstance(raw_role, str):
+                role_str = raw_role.upper()
+
         return Node(
             id=node_id,
+            role=role_str,
             short_name=user.get("shortName"),
             long_name=user.get("longName"),
             hardware_model=hw_model,

@@ -4,7 +4,36 @@ Modelli dati per i nodi Meshtastic.
 from __future__ import annotations
 from typing import Optional, Literal
 from datetime import datetime, timezone
+from enum import Enum
 from pydantic import BaseModel, Field, validator
+
+
+# ---------------------------------------------------------------------------
+# Node roles (mirrors proto/node.proto)
+# ---------------------------------------------------------------------------
+
+class NodeRole(str, Enum):
+    CLIENT         = "CLIENT"
+    CLIENT_MUTE    = "CLIENT_MUTE"
+    ROUTER         = "ROUTER"
+    ROUTER_CLIENT  = "ROUTER_CLIENT"   # deprecated
+    REPEATER       = "REPEATER"        # deprecated
+    TRACKER        = "TRACKER"
+    SENSOR         = "SENSOR"
+    TAK            = "TAK"
+    CLIENT_HIDDEN  = "CLIENT_HIDDEN"
+    LOST_AND_FOUND = "LOST_AND_FOUND"
+    TAK_TRACKER    = "TAK_TRACKER"
+    ROUTER_LATE    = "ROUTER_LATE"
+    CLIENT_BASE    = "CLIENT_BASE"
+
+
+# Roles eligible for automatic coverage calculation
+AUTO_COMPUTE_ROLES: frozenset[NodeRole] = frozenset({
+    NodeRole.ROUTER,
+    NodeRole.ROUTER_LATE,
+    NodeRole.CLIENT_BASE,
+})
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +185,7 @@ class AntennaParams(BaseModel):
 class Node(BaseModel):
     """Nodo Meshtastic con tutti i dati disponibili."""
     id: str = Field(..., description="Identificativo !aabbccdd")
+    role: Optional[NodeRole] = Field(default=None, description="Ruolo del nodo nella mesh")
     short_name: Optional[str] = None
     long_name: Optional[str] = None
     hardware_model: Optional[str] = None
@@ -236,6 +266,7 @@ class Node(BaseModel):
 
 class NodeUpdate(BaseModel):
     """Schema per aggiornamento parziale nodo via API."""
+    role: Optional[NodeRole] = None
     short_name: Optional[str] = None
     long_name: Optional[str] = None
     position: Optional[Position] = None

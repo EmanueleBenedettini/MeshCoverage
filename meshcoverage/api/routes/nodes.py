@@ -20,7 +20,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from meshcoverage import database
-from meshcoverage.models.node import Node, NodeUpdate, AntennaParams, Position, MODEM_PRESETS
+from meshcoverage.models.node import Node, NodeUpdate, AntennaParams, Position, MODEM_PRESETS, NodeRole
 from meshcoverage.api.websocket import notify_node_updated
 
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
@@ -32,6 +32,7 @@ router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 
 class NodeResponse(BaseModel):
     id: str
+    role: Optional[NodeRole] = None
     short_name: Optional[str]
     long_name: Optional[str]
     hardware_model: Optional[str]
@@ -61,6 +62,7 @@ class NodeResponse(BaseModel):
 
 class NodeCreateRequest(BaseModel):
     id: str
+    role: Optional[NodeRole] = None
     short_name: Optional[str] = None
     long_name: Optional[str] = None
     position: Optional[Position] = None
@@ -157,6 +159,7 @@ async def create_node(req: NodeCreateRequest):
 
     node = Node(
         id=req.id,
+        role=req.role,
         short_name=req.short_name,
         long_name=req.long_name,
         position=req.position,
@@ -181,6 +184,7 @@ async def update_node(node_id: str, req: NodeCreateRequest):
 
     updated = Node(
         id=node_id,
+        role=req.role,
         short_name=req.short_name,
         long_name=req.long_name,
         position=req.position,
