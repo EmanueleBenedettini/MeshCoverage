@@ -1,17 +1,17 @@
 """
-Generatore di heatmap aggregate.
+Generatore di heatmap aggregate + shadow zone aggregate.
 
 Per ogni combinazione (frequenza, modem_preset) presente nel database:
 1. Carica i viewshed di tutti i nodi corrispondenti
 2. Per ogni punto della griglia, mantiene solo il link budget massimo
-3. Salva il risultato come GeoJSON
+   (copertura) e, separatamente, raccoglie i punti shadow di tutti i nodi
+3. Salva copertura come GeoJSON e shadow zone come GeoJSON separato
 """
 from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone
-from itertools import groupby
 from pathlib import Path
 from typing import Optional
 
@@ -35,6 +35,7 @@ def _grid_key(lat: float, lon: float) -> tuple:
 def generate_heatmaps():
     """
     Genera le heatmap GeoJSON per ogni combinazione freq+preset.
+    Genera anche la shadow zone GeoJSON aggregata.
     Deve essere chiamata dopo aver calcolato i viewshed dei nodi.
     """
     settings.heatmaps_dir.mkdir(parents=True, exist_ok=True)
@@ -60,10 +61,15 @@ def generate_heatmaps():
 
 
 def _generate_single_heatmap(freq: int, preset: str, nodes: list):
-    """Genera la heatmap per una specifica combinazione freq+preset."""
+    """Genera la heatmap + shadow GeoJSON per una specifica combinazione freq+preset."""
 
-    # Griglia: dict (lat_q, lon_q) → max_link_budget
-    grid: dict[tuple, float] = {}
+    # Coverage grid: (lat_q, lon_q) → max_link_budget
+    coverage_grid: dict[tuple, float] = {}
+
+    # Shadow grid: (lat_q, lon_q) → True
+    # A point is kept as shadow only if NO node covers it.
+    # We collect all shadow points first, then subtract covered ones.
+    shadow_candidates: dict[tuple, float] = {}  # key → min distance across nodes
 
     nodes_used = 0
     for node in nodes:
@@ -71,30 +77,101 @@ def _generate_single_heatmap(freq: int, preset: str, nodes: list):
         path = settings.coverage_dir / f"coverage_{safe_id}.npz"
         data = load_viewshed(path)
 
-        if data is None or len(data["lats"]) == 0:
+        if data is None:
             log.debug(f"Nessun viewshed per nodo {node.id}, skip")
             continue
 
         nodes_used += 1
 
-        # Maschera: solo punti con LOS e link budget > minimo
-        mask = data["link_budget"] >= settings.min_link_budget_db
+        # --- Coverage points ---
+        if len(data["lats"]) > 0:
+            mask = data["link_budget"] >= settings.min_link_budget_db
+            for i in np.where(mask)[0]:
+                lat = float(data["lats"][i])
+                lon = float(data["lons"][i])
+                lb = float(data["link_budget"][i])
+                key = _grid_key(lat, lon)
+                if key not in coverage_grid or coverage_grid[key] < lb:
+                    coverage_grid[key] = lb
 
-        for i in np.where(mask)[0]:
-            lat = float(data["lats"][i])
-            lon = float(data["lons"][i])
-            lb = float(data["link_budget"][i])
+        # --- Shadow zone points ---
+        shadow_lats = data.get("shadow_lats", np.array([]))
+        shadow_lons = data.get("shadow_lons", np.array([]))
+        shadow_dists = data.get("shadow_distances", np.array([]))
 
+        for i in range(len(shadow_lats)):
+            lat = float(shadow_lats[i])
+            lon = float(shadow_lons[i])
+            dist = float(shadow_dists[i]) if i < len(shadow_dists) else 0.0
             key = _grid_key(lat, lon)
-            if key not in grid or grid[key] < lb:
-                grid[key] = lb
+            # Keep the shadow candidate closest to any transmitter
+            if key not in shadow_candidates or shadow_candidates[key] > dist:
+                shadow_candidates[key] = dist
 
-    if not grid:
-        log.warning(f"Heatmap {freq}/{preset}: nessun punto di copertura trovato")
+    if not coverage_grid and not shadow_candidates:
+        log.warning(f"Heatmap {freq}/{preset}: nessun punto trovato")
         return
 
-    # Crea GeoJSON
-    features = [
+    # Remove shadow candidates that are already covered by some node
+    pure_shadow = {
+        key: dist
+        for key, dist in shadow_candidates.items()
+        if key not in coverage_grid
+    }
+
+    generated_at = datetime.now(timezone.utc).isoformat()
+
+    # ── Write coverage GeoJSON ──
+    if coverage_grid:
+        features = [
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [round(lon, 6), round(lat, 6)],
+                },
+                "properties": {
+                    "link_budget_db": round(lb, 2),
+                },
+            }
+            for (lat, lon), lb in coverage_grid.items()
+        ]
+
+        geojson = {
+            "type": "FeatureCollection",
+            "features": features,
+            "properties": {
+                "frequency_mhz": freq,
+                "modem_preset": preset,
+                "generated_at": generated_at,
+                "node_count": nodes_used,
+                "point_count": len(features),
+            },
+        }
+
+        out_path = settings.heatmaps_dir / f"heatmap_{freq}_{preset}.geojson"
+        with open(out_path, "w") as f:
+            json.dump(geojson, f, separators=(",", ":"))
+
+        meta_path = settings.heatmaps_dir / f"heatmap_{freq}_{preset}_meta.json"
+        with open(meta_path, "w") as f:
+            json.dump({
+                "frequency_mhz": freq,
+                "modem_preset": preset,
+                "generated_at": generated_at,
+                "node_count": nodes_used,
+                "point_count": len(features),
+                "shadow_point_count": len(pure_shadow),
+                "file_size_kb": round(out_path.stat().st_size / 1024, 1),
+            }, f, indent=2)
+
+        log.info(
+            f"✓ Heatmap {freq}MHz/{preset}: {len(features)} punti "
+            f"da {nodes_used} nodi → {out_path.name}"
+        )
+
+    # ── Write shadow GeoJSON ──
+    shadow_features = [
         {
             "type": "Feature",
             "geometry": {
@@ -102,44 +179,29 @@ def _generate_single_heatmap(freq: int, preset: str, nodes: list):
                 "coordinates": [round(lon, 6), round(lat, 6)],
             },
             "properties": {
-                "link_budget_db": round(lb, 2),
+                "distance_m": round(dist),
+                "shadow": True,
             },
         }
-        for (lat, lon), lb in grid.items()
+        for (lat, lon), dist in pure_shadow.items()
     ]
 
-    generated_at = datetime.now(timezone.utc).isoformat()
-
-    geojson = {
+    shadow_geojson = {
         "type": "FeatureCollection",
-        "features": features,
+        "features": shadow_features,
         "properties": {
             "frequency_mhz": freq,
             "modem_preset": preset,
             "generated_at": generated_at,
             "node_count": nodes_used,
-            "point_count": len(features),
+            "shadow_count": len(shadow_features),
         },
     }
 
-    # Salva GeoJSON
-    out_path = settings.heatmaps_dir / f"heatmap_{freq}_{preset}.geojson"
-    with open(out_path, "w") as f:
-        json.dump(geojson, f, separators=(",", ":"))
-
-    # Salva metadati separati
-    meta_path = settings.heatmaps_dir / f"heatmap_{freq}_{preset}_meta.json"
-    with open(meta_path, "w") as f:
-        json.dump({
-            "frequency_mhz": freq,
-            "modem_preset": preset,
-            "generated_at": generated_at,
-            "node_count": nodes_used,
-            "point_count": len(features),
-            "file_size_kb": round(out_path.stat().st_size / 1024, 1),
-        }, f, indent=2)
+    shadow_path = settings.heatmaps_dir / f"shadows_{freq}_{preset}.geojson"
+    with open(shadow_path, "w") as f:
+        json.dump(shadow_geojson, f, separators=(",", ":"))
 
     log.info(
-        f"✓ Heatmap {freq}MHz/{preset}: {len(features)} punti "
-        f"da {nodes_used} nodi → {out_path.name}"
+        f"✓ Shadow zones {freq}MHz/{preset}: {len(shadow_features)} punti → {shadow_path.name}"
     )

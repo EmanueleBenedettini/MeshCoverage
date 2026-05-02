@@ -5,6 +5,13 @@ Calcolo viewshed (analisi di visibilità) parallelizzato.
       array numpy nel processo padre e condivisa con i worker via
       multiprocessing.shared_memory.  I worker non aprono più rasterio né
       reinizializzano DEMHandler: accedono direttamente alla RAM condivisa.
+        Algoritmo:
+        1. Genera una griglia di punti target nell'area di interesse
+        2. Per ogni punto target, estrae il profilo di elevazione DEM
+        3. Verifica LOS e clearance zona di Fresnel
+        4. Calcola link budget per i punti raggiungibili
+        5. Salva risultati in formato compresso (.npz)
+            — include anche le shadow zone (punti senza LOS)
 
   Lettura windowed — load_area_array() esegue un singolo reproject/read
       per dataset invece di N letture puntuali (Window(col,row,1,1)).
@@ -177,14 +184,9 @@ def _arr_profile(
 
 def _compute_point(args: tuple) -> Optional[dict]:
     """
-    Evaluates a single target grid point.
-
-    Changes vs original:
-      Free-space pre-filter: reject points where even perfect LOS
-          would not achieve link_margin > -20 dB.  No DEM access needed.
-      Uses shared-memory array via _arr_elevation / _arr_profile instead
-          of re-initialising DEMHandler per-call.
-      _arr_profile does a single vectorised pass over the in-RAM array.
+    Returns a dict with los=True (covered) or los=False (shadow zone).
+    Always returns a result for valid terrain points so shadow zones
+    can be recorded.
     """
     (
         target_lat, target_lon,
@@ -222,7 +224,7 @@ def _compute_point(args: tuple) -> Optional[dict]:
         if ant_beamwidth < 360.0:
             diff = abs(((brng - ant_azimuth) + 180) % 360 - 180)
             if diff > ant_beamwidth / 2.0:
-                return None
+                return None  # Fuori dal fascio — non è shadow zone, è semplicemente fuori settore
 
         # Directional antenna gain at this bearing
         if ant_beamwidth >= 360.0:
@@ -236,8 +238,8 @@ def _compute_point(args: tuple) -> Optional[dict]:
         # ── array-based DEM lookups ───────────────────────────
         target_elev = _arr_elevation(target_lat, target_lon)
         if target_elev is None:
-            return None
-        rx_alt_m = target_elev + rx_height_m
+            return None # Nessun dato DEM — non possiamo determinare se shadow
+        rx_alt_m = target_elev + rx_height_m 
 
         n_samples = max(50, int(dist_m / 30))
         distances_m, lats, elevations = _arr_profile(
@@ -256,11 +258,13 @@ def _compute_point(args: tuple) -> Optional[dict]:
             apply_earth_bulge=False,
         )
         if not los_ok:
+            # Shadow zone: terreno blocca la visibilità
             return {
                 "lat": target_lat, "lon": target_lon,
                 "distance_m": dist_m, "los": False,
                 "fresnel_ok": False, "link_budget_db": float("-inf"),
                 "bearing": brng,
+                "shadow": True,  # <-- marcatore shadow zone
             }
 
         # Fresnel clearance check
@@ -282,6 +286,7 @@ def _compute_point(args: tuple) -> Optional[dict]:
             "fresnel_ok": fresnel_ok,
             "link_budget_db": lb["link_margin_db"],
             "bearing": brng,
+            "shadow": False,
         }
 
     except Exception:
@@ -340,6 +345,7 @@ def generate_target_grid(
     Genera la griglia di punti target nell'area di interesse.
     Itera su tutti i punti della griglia senza settori angolari fissi.
     """
+    # Dimensioni griglia in gradi
     lat_step = resolution_m / 111_000.0
     lon_step = resolution_m / (111_000.0 * math.cos(math.radians(center_lat)))
     n_steps  = int(max_range_m / resolution_m) + 1
@@ -376,14 +382,12 @@ def compute_viewshed(
 ) -> list[dict]:
     """
     Calcola il viewshed completo per un nodo.
-
-    Workflow:
-      1. Load the DEM tile for the analysis bbox into a numpy array
-      2. Copy the array into a SharedMemory block
-      3. Spawn worker pool with _worker_init so each worker attaches once
-      4. Each worker uses _arr_elevation / _arr_profile and applies
-         the free-space pre-filter before any DEM access
-      5. Clean up SharedMemory in a finally block
+    Restituisce la lista dei punti con i risultati (sia coperti che shadow zone).
+    
+    Args:
+        params: parametri del calcolo
+        n_workers: numero di processi paralleli (0=auto)
+        progress_callback: callable(done, total) per aggiornamento progresso
     """
     from multiprocessing.shared_memory import SharedMemory
     from meshcoverage.processing.dem_handler import get_dem_handler
@@ -509,10 +513,12 @@ def compute_viewshed(
     if progress_callback:
         progress_callback(total, total)
 
-    fresnel_ok_count = sum(1 for r in results if r.get("fresnel_ok"))
+    covered = len([r for r in results if r.get("los")])
+    shadow = len([r for r in results if r.get("shadow")])
     log.info(
-        f"Viewshed {params.node_id}: {len(results)} punti coperti "
-        f"({fresnel_ok_count} con Fresnel ok)"
+        f"Viewshed {params.node_id}: {covered} punti coperti, "
+        f"{shadow} shadow zone "
+        f"({len([r for r in results if r.get('fresnel_ok')])} con Fresnel ok)"
     )
     return results
 
@@ -522,10 +528,14 @@ def compute_viewshed(
 # ---------------------------------------------------------------------------
 
 def save_viewshed(results: list[dict], output_path: Path, metadata: dict):
-    """Salva i risultati del viewshed in formato NPZ compresso."""
+    """
+    Salva i risultati del viewshed in formato NPZ compresso.
+    Separate arrays for covered points and shadow zones.
+    """
     if not results:
         np.savez_compressed(
             output_path,
+            # Covered points
             lats=np.array([]),
             lons=np.array([]),
             distances=np.array([]),
@@ -533,38 +543,73 @@ def save_viewshed(results: list[dict], output_path: Path, metadata: dict):
             fresnel_ok=np.array([], dtype=bool),
             link_budget=np.array([]),
             bearings=np.array([]),
+            # Shadow zones
+            shadow_lats=np.array([]),
+            shadow_lons=np.array([]),
+            shadow_distances=np.array([]),
             metadata=str(metadata),
         )
         return
 
+    # Separate covered vs shadow
+    covered = [r for r in results if r.get("los", False)]
+    shadow_pts = [r for r in results if r.get("shadow", False)]
+
+    # Covered point arrays
+    lats = np.array([r["lat"] for r in covered]) if covered else np.array([])
+    lons = np.array([r["lon"] for r in covered]) if covered else np.array([])
+    distances = np.array([r["distance_m"] for r in covered]) if covered else np.array([])
+    los = np.ones(len(covered), dtype=bool)
+    fresnel = np.array([r["fresnel_ok"] for r in covered], dtype=bool) if covered else np.array([], dtype=bool)
+    lb = np.array([r["link_budget_db"] for r in covered]) if covered else np.array([])
+    bearings = np.array([r["bearing"] for r in covered]) if covered else np.array([])
+
+    # Shadow zone arrays
+    shadow_lats = np.array([r["lat"] for r in shadow_pts]) if shadow_pts else np.array([])
+    shadow_lons = np.array([r["lon"] for r in shadow_pts]) if shadow_pts else np.array([])
+    shadow_distances = np.array([r["distance_m"] for r in shadow_pts]) if shadow_pts else np.array([])
+
     np.savez_compressed(
         output_path,
-        lats=np.array([r["lat"]           for r in results]),
-        lons=np.array([r["lon"]           for r in results]),
-        distances=np.array([r["distance_m"]    for r in results]),
-        los=np.array([r["los"]            for r in results], dtype=bool),
-        fresnel_ok=np.array([r["fresnel_ok"]   for r in results], dtype=bool),
-        link_budget=np.array([r["link_budget_db"] for r in results]),
-        bearings=np.array([r["bearing"]       for r in results]),
+        lats=lats, lons=lons,
+        distances=distances,
+        los=los, fresnel_ok=fresnel,
+        link_budget=lb,
+        bearings=bearings,
+        shadow_lats=shadow_lats,
+        shadow_lons=shadow_lons,
+        shadow_distances=shadow_distances,
         metadata=str(metadata),
     )
-    log.info(f"Viewshed salvato: {output_path} ({len(results)} punti)")
+    log.info(
+        f"Viewshed salvato: {output_path} "
+        f"({len(covered)} coperti, {len(shadow_pts)} shadow zone)"
+    )
 
 
 def load_viewshed(path: Path) -> Optional[dict]:
-    """Carica i risultati di un viewshed salvato."""
+    """
+    Carica i risultati di un viewshed salvato.
+    Returns dict with both covered and shadow_zone arrays.
+    Shadow arrays may be empty for files computed before this update.
+    """
     if not path.exists():
         return None
     try:
         data = np.load(path, allow_pickle=True)
         return {
-            "lats":       data["lats"],
-            "lons":       data["lons"],
-            "distances":  data["distances"],
-            "los":        data["los"],
+            # Covered / reachable points
+            "lats": data["lats"],
+            "lons": data["lons"],
+            "distances": data["distances"],
+            "los": data["los"],
             "fresnel_ok": data["fresnel_ok"],
             "link_budget": data["link_budget"],
-            "bearings":   data.get("bearings", np.array([])),
+            "bearings": data.get("bearings", np.array([])),
+            # Shadow zones (may not exist in older files)
+            "shadow_lats": data["shadow_lats"] if "shadow_lats" in data else np.array([]),
+            "shadow_lons": data["shadow_lons"] if "shadow_lons" in data else np.array([]),
+            "shadow_distances": data["shadow_distances"] if "shadow_distances" in data else np.array([]),
         }
     except Exception as e:
         log.error(f"Errore caricamento viewshed {path}: {e}")

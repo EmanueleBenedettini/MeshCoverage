@@ -43,6 +43,12 @@
           </span>
         </label>
         <label class="toggle-row">
+          <input type="checkbox" id="chk-shadows" checked>
+          <span class="toggle-label">
+            <span class="dot-shadow"></span>Zone d'ombra
+          </span>
+        </label>
+        <label class="toggle-row">
           <input type="checkbox" id="chk-links" checked>
           <span class="toggle-label">
             <span class="dot" style="background:#3b82f6"></span>Connessioni dirette
@@ -113,7 +119,20 @@
   </aside>
 
   <!-- ── Mappa ── -->
-  <div id="map"></div>
+  <div id="map">
+    <!-- Legenda in basso a destra (fuori Leaflet attribution) -->
+    <div class="map-legend">
+      <h4>Legenda</h4>
+      <div class="legend-row">
+        <span class="legend-swatch legend-swatch-cov"></span>
+        <span>Copertura radio</span>
+      </div>
+      <div class="legend-row">
+        <span class="legend-swatch legend-swatch-shadow"></span>
+        <span>Zona d'ombra</span>
+      </div>
+    </div>
+  </div>
 
 </div>
 

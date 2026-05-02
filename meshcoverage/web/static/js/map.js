@@ -2,7 +2,8 @@
  * MeshMonitor — Logica mappa principale (Leaflet.js)
  *
  * Gestisce:
- * - Layer heatmap (PixelCoverageLayer — canvas raster a pixel)
+ * - Layer heatmap (leaflet.heat)
+ * - Layer shadow zone (canvas overlay — hatched dark polygons)
  * - Layer connessioni inter-nodo (LineString)
  * - Layer marker nodi
  * - Sidebar con dettaglio nodo e diagramma di radiazione
@@ -12,7 +13,7 @@
 'use strict';
 
 // ── Stato globale ──────────────────────────────────────────────────────────
-let map, heatLayer, linksLayer, nodesLayer;
+let map, heatLayer, shadowLayer, linksLayer, nodesLayer;
 let allNodes = {};
 let selectedNodeId = null;
 
@@ -21,6 +22,7 @@ const state = {
   preset: null,
   minBudget: 0,
   showHeatmap: true,
+  showShadows: true,
   showLinks: true,
   showNodes: true,
 };
@@ -201,6 +203,7 @@ function initControls() {
   const selPreset  = document.getElementById('sel-preset');
   const inpBudget  = document.getElementById('inp-min-budget');
   const chkHeatmap = document.getElementById('chk-heatmap');
+  const chkShadows = document.getElementById('chk-shadows');
   const chkLinks   = document.getElementById('chk-links');
   const chkNodes   = document.getElementById('chk-nodes');
   const btnApply   = document.getElementById('btn-apply-filters');
@@ -208,8 +211,8 @@ function initControls() {
   const btnClose   = document.getElementById('btn-close-detail');
   const btnComputeNode = document.getElementById('btn-compute-node');
 
-  state.freq      = selFreq?.value   ? parseInt(selFreq.value)   : null;
-  state.preset    = selPreset?.value || null;
+  state.freq    = selFreq?.value   ? parseInt(selFreq.value)   : null;
+  state.preset  = selPreset?.value || null;
   state.minBudget = parseFloat(inpBudget?.value || '0');
 
   btnApply?.addEventListener('click', applyFilters);
@@ -224,6 +227,10 @@ function initControls() {
     state.showHeatmap = e.target.checked;
     toggleHeatmap();
   });
+  chkShadows?.addEventListener('change', e => {
+    state.showShadows = e.target.checked;
+    toggleShadows();
+  });
   chkLinks?.addEventListener('change', e => {
     state.showLinks = e.target.checked;
     toggleLinks();
@@ -236,14 +243,14 @@ function initControls() {
 
 function initWsHandlers() {
   meshWS
-    .on('compute_started', msg => {
+    .on('compute_started', () => {
       setComputeProgress(0, 'Calcolo avviato...');
       showProgress(true);
     })
     .on('compute_progress', msg => {
       setComputeProgress(msg.pct || 0, `${msg.pct || 0}% — ${msg.node_id || ''}`);
     })
-    .on('compute_done', msg => {
+    .on('compute_done', () => {
       setComputeProgress(100, 'Completato!');
       setTimeout(() => showProgress(false), 3000);
       showToast('Calcolo completato', 'success');
@@ -293,18 +300,15 @@ async function applyFilters() {
 
   await Promise.all([
     loadHeatmap(),
+    loadShadows(),
     loadLinks(),
   ]);
 }
 
-// ── Heatmap (pixel layer) ──────────────────────────────────────────────────
+// ── Heatmap ────────────────────────────────────────────────────────────────
 
 async function loadHeatmap() {
-  // Rimuovi layer precedente
-  if (heatLayer) {
-    map.removeLayer(heatLayer);
-    heatLayer = null;
-  }
+  if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
   if (!state.freq || !state.preset || !state.showHeatmap) return;
 
   try {
@@ -312,12 +316,13 @@ async function loadHeatmap() {
     const geojson = await apiGet(url);
     if (!geojson?.features?.length) return;
 
-    // Converte le feature GeoJSON in punti {lat, lon, lb}
-    const points = geojson.features.map(f => ({
-      lon: f.geometry.coordinates[0],
-      lat: f.geometry.coordinates[1],
-      lb:  f.properties.link_budget_db || 0,
-    }));
+    const maxLB = 30;
+    const points = geojson.features.map(f => {
+      const [lon, lat] = f.geometry.coordinates;
+      const lb = f.properties.link_budget_db || 0;
+      const intensity = Math.max(0, Math.min(1, (lb + 10) / (maxLB + 10)));
+      return [lat, lon, intensity];
+    });
 
     heatLayer = new PixelCoverageLayer(points);
 
@@ -326,10 +331,62 @@ async function loadHeatmap() {
     }
 
   } catch (e) {
-    // Heatmap non disponibile — non bloccante
     console.debug('Heatmap non disponibile:', e.message);
   }
 }
+
+// ── Shadow zones ───────────────────────────────────────────────────────────
+
+/**
+ * Renders terrain shadow zones using a canvas-based dot overlay.
+ * Shadow zones are displayed as semi-transparent dark purple/grey dots
+ * with a hatched pattern to visually distinguish them from low-signal areas.
+ */
+async function loadShadows() {
+  if (shadowLayer) { map.removeLayer(shadowLayer); shadowLayer = null; }
+  if (!state.freq || !state.preset || !state.showShadows) return;
+
+  try {
+    const url = `/api/heatmaps/${state.freq}/${state.preset}/shadows`;
+    const geojson = await apiGet(url);
+    if (!geojson?.features?.length) return;
+
+    // Build a canvas-rendered layer via L.heatLayer-style approach but
+    // with a distinct purple/dark gradient to visually separate from coverage.
+    const points = geojson.features.map(f => {
+      const [lon, lat] = f.geometry.coordinates;
+      // All shadow points have equal intensity — they are binary (blocked or not).
+      return [lat, lon, 1.0];
+    });
+
+    shadowLayer = L.heatLayer(points, {
+      radius: 14,
+      blur: 10,
+      maxZoom: 17,
+      // Dark purple gradient — visually distinct from the coverage heatmap
+      gradient: {
+        0.0: 'rgba(30,10,60,0)',
+        0.3: 'rgba(60,10,100,0.35)',
+        0.6: 'rgba(80,0,120,0.55)',
+        1.0: 'rgba(40,0,80,0.7)',
+      },
+    });
+
+    if (state.showShadows) {
+      shadowLayer.addTo(map);
+      // Ensure shadow layer is below heatmap layer visually
+      if (heatLayer) {
+        shadowLayer.setZIndex && shadowLayer.setZIndex(1);
+      }
+    }
+
+  } catch (e) {
+    // Shadow data not yet computed — not a blocking error
+    console.debug('Shadow zones non disponibili:', e.message);
+  }
+}
+
+// ── Links ──────────────────────────────────────────────────────────────────
 
 async function loadLinks() {
   linksLayer.clearLayers();
@@ -451,14 +508,17 @@ function infoItem(label, value) {
 function closeNodeDetail() {
   selectedNodeId = null;
   document.getElementById('node-detail').style.display = 'none';
-
   if (window._nodeCoverageLayer) {
     map.removeLayer(window._nodeCoverageLayer);
     window._nodeCoverageLayer = null;
   }
-
+  if (window._nodeShadowLayer) {
+    map.removeLayer(window._nodeShadowLayer);
+    window._nodeShadowLayer = null;
+  }
   renderNodeMarkers();
   loadHeatmap();
+  loadShadows();
 }
 
 // ── Diagramma di radiazione ────────────────────────────────────────────────
@@ -477,7 +537,7 @@ function drawRadiationDiagram(node) {
   const beamwidth = ant?.beamwidth_deg || 360;
   const gainNorm  = ant?.gain_dbi ? Math.min(1, ant.gain_dbi / 12) : 0.5;
 
-  // Griglia
+  // Background grid
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   ctx.lineWidth = 1;
   for (let i = 1; i <= 4; i++) {
@@ -501,9 +561,10 @@ function drawRadiationDiagram(node) {
     ctx.stroke();
   });
 
-  // Pattern di radiazione
+  // Radiation pattern
   ctx.beginPath();
-  for (let deg = 0; deg <= 360; deg++) {
+  const steps = 360;
+  for (let deg = 0; deg <= steps; deg++) {
     const rad = (deg - 90) * Math.PI / 180;
     let g;
     if (isOmni) {
@@ -511,7 +572,11 @@ function drawRadiationDiagram(node) {
     } else {
       const diff   = Math.abs(((deg - azimuth) + 180) % 360 - 180);
       const halfBW = beamwidth / 2;
-      g = diff <= halfBW ? gainNorm * (1 - 0.3 * (diff / halfBW)) : 0.08;
+      if (diff <= halfBW) {
+        g = gainNorm * (1 - 0.3 * (diff / halfBW));
+      } else {
+        g = 0.08;
+      }
     }
     const px = cx + r * g * Math.cos(rad);
     const py = cy + r * g * Math.sin(rad);
@@ -576,35 +641,67 @@ async function loadNodeLinksDetail(nodeId) {
   }
 }
 
-// ── Copertura nodo singolo (pixel layer) ───────────────────────────────────
+// ── Copertura nodo singolo + shadow ───────────────────────────────────────
 
 async function loadNodeCoverage(nodeId) {
+  // Remove previous single-node layers
   if (window._nodeCoverageLayer) {
     map.removeLayer(window._nodeCoverageLayer);
     window._nodeCoverageLayer = null;
   }
-  // Rimuovi heatmap generale mentre è attiva la copertura del nodo
-  if (heatLayer) {
-    map.removeLayer(heatLayer);
+  if (window._nodeShadowLayer) {
+    map.removeLayer(window._nodeShadowLayer);
+    window._nodeShadowLayer = null;
   }
+  // Hide aggregated layers while viewing a single node
+  if (heatLayer) { map.removeLayer(heatLayer); }
+  if (shadowLayer) { map.removeLayer(shadowLayer); }
 
+  // -- Coverage --
   try {
     const url    = `/api/coverage/${nodeId}/geojson?min_budget=${state.minBudget}`;
     const geojson = await apiGet(url);
-    if (!geojson?.features?.length) return;
+    if (geojson?.features?.length) {
+      const points = geojson.features.map(f => {
+        const [lon, lat] = f.geometry.coordinates;
+        const lb = f.properties.link_budget_db || 0;
+        const intensity = Math.max(0, Math.min(1, (lb + 10) / 40));
+        return [lat, lon, intensity];
+      });
 
-    const points = geojson.features.map(f => ({
-      lon: f.geometry.coordinates[0],
-      lat: f.geometry.coordinates[1],
-      lb:  f.properties.link_budget_db || 0,
-    }));
-
-    window._nodeCoverageLayer = new PixelCoverageLayer(points);
-    map.addLayer(window._nodeCoverageLayer);
-
+      window._nodeCoverageLayer = L.heatLayer(points, {
+        radius: 15, blur: 12, maxZoom: 17,
+        gradient: { 0: '#1e3a5f', 0.4: '#3b82f6', 0.7: '#f97316', 1: '#22c55e' },
+      }).addTo(map);
+    }
   } catch (e) {
-    // Copertura non calcolata — ok
     console.debug('Copertura nodo non disponibile:', e.message);
+  }
+
+  // -- Shadow zones for this node --
+  if (state.showShadows) {
+    try {
+      const shadowUrl = `/api/coverage/${nodeId}/shadows`;
+      const shadowGeojson = await apiGet(shadowUrl);
+      if (shadowGeojson?.features?.length) {
+        const shadowPoints = shadowGeojson.features.map(f => {
+          const [lon, lat] = f.geometry.coordinates;
+          return [lat, lon, 1.0];
+        });
+
+        window._nodeShadowLayer = L.heatLayer(shadowPoints, {
+          radius: 12, blur: 8, maxZoom: 17,
+          gradient: {
+            0.0: 'rgba(30,10,60,0)',
+            0.3: 'rgba(60,10,100,0.35)',
+            0.6: 'rgba(80,0,120,0.55)',
+            1.0: 'rgba(40,0,80,0.7)',
+          },
+        }).addTo(map);
+      }
+    } catch (e) {
+      console.debug('Shadow zones nodo non disponibili:', e.message);
+    }
   }
 }
 
@@ -636,6 +733,19 @@ function toggleHeatmap() {
     map.addLayer(heatLayer);
   } else {
     map.removeLayer(heatLayer);
+  }
+}
+
+function toggleShadows() {
+  if (shadowLayer) {
+    state.showShadows ? map.addLayer(shadowLayer) : map.removeLayer(shadowLayer);
+  }
+  if (window._nodeShadowLayer) {
+    state.showShadows ? map.addLayer(window._nodeShadowLayer) : map.removeLayer(window._nodeShadowLayer);
+  }
+  // If enabling and layer not loaded yet, fetch it
+  if (state.showShadows && !shadowLayer && !selectedNodeId) {
+    loadShadows();
   }
 }
 

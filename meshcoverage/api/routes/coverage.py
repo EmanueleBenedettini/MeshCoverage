@@ -7,6 +7,7 @@ Endpoints:
   GET  /api/coverage/status               — stato calcolo globale
   GET  /api/coverage/status/{node_id}     — stato calcolo nodo specifico
   GET  /api/coverage/{node_id}/geojson    — copertura nodo come GeoJSON
+  GET  /api/coverage/{node_id}/shadows    — shadow zones come GeoJSON   ← NEW
   GET  /api/coverage/{node_id}/metadata   — metadati calcolo nodo
   GET  /api/coverage/available            — lista nodi con copertura calcolata
 """
@@ -291,5 +292,91 @@ async def get_node_coverage_geojson(
             "node_id": node_id,
             "count": len(features),
             "filtered": len(indices) < len(data["lats"]),
+        },
+    }
+
+
+@router.get("/{node_id}/shadows")
+async def get_node_shadow_zones(
+    node_id: str,
+    max_distance_km: float = Query(default=None, description="Limit shadow zones to this distance (km)"),
+):
+    """
+    Returns terrain shadow zones for the node as a GeoJSON FeatureCollection.
+
+    Shadow zones are areas where the terrain blocks line of sight from the antenna.
+    These points are within the antenna's beam sector and DEM coverage but have
+    no direct radio path due to terrain obstruction.
+
+    Useful for overlaying on the map alongside the coverage heatmap to show
+    where signal cannot reach due to terrain (as opposed to distance).
+    """
+    from meshcoverage.processing.viewshed import load_viewshed
+
+    safe_id = node_id.lstrip("!").lower()
+    path = settings.coverage_dir / f"coverage_{safe_id}.npz"
+
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Copertura non calcolata. Avviare prima il calcolo.",
+        )
+
+    data = load_viewshed(path)
+    if data is None:
+        return {
+            "type": "FeatureCollection",
+            "features": [],
+            "properties": {"node_id": node_id, "shadow_count": 0},
+        }
+
+    shadow_lats = data.get("shadow_lats", np.array([]))
+    shadow_lons = data.get("shadow_lons", np.array([]))
+    shadow_distances = data.get("shadow_distances", np.array([]))
+
+    if len(shadow_lats) == 0:
+        return {
+            "type": "FeatureCollection",
+            "features": [],
+            "properties": {
+                "node_id": node_id,
+                "shadow_count": 0,
+                "note": "No shadow data. Recompute coverage to include shadow zones.",
+            },
+        }
+
+    # Optional distance filter
+    if max_distance_km is not None:
+        max_dist_m = max_distance_km * 1000.0
+        mask = shadow_distances <= max_dist_m
+        shadow_lats = shadow_lats[mask]
+        shadow_lons = shadow_lons[mask]
+        shadow_distances = shadow_distances[mask]
+
+    features = [
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    round(float(shadow_lons[i]), 6),
+                    round(float(shadow_lats[i]), 6),
+                ],
+            },
+            "properties": {
+                "distance_m": round(float(shadow_distances[i])),
+                "node_id": node_id,
+                "shadow": True,
+            },
+        }
+        for i in range(len(shadow_lats))
+    ]
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "properties": {
+            "node_id": node_id,
+            "shadow_count": len(features),
         },
     }
