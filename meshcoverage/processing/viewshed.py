@@ -36,6 +36,7 @@ import numpy as np
 
 from meshcoverage.processing.dem_handler import (
     haversine_m, bearing_deg, earth_bulge_m, EARTH_RADIUS_M,
+    get_dem_handler, get_dsm_handler,
 )
 from meshcoverage.processing.fresnel import check_los, check_fresnel_clearance
 from meshcoverage.processing.link_budget import (
