@@ -31,10 +31,10 @@ def freq_mhz_to_hz(freq_mhz: float) -> float:
     return freq_mhz * 1e6
 
 
-def fspl_db(distance_m: float, freq_mhz: float) -> float:
+def fspl_db(distance_m: float, freq_mhz: float, tx_gain_dbi: float = 2.15, rx_gain_dbi: float = 2.15) -> float:
     """
     Free Space Path Loss in dB.
-    FSPL = 20*log10(d_m) + 20*log10(f_hz) + 20*log10(4π/c)
+    FSPL = 20*log10(d_m) + 20*log10(f_hz) + 20*log10(4π/c) - Gtx - Grx
     """
     if distance_m <= 0:
         return 0.0
@@ -43,6 +43,8 @@ def fspl_db(distance_m: float, freq_mhz: float) -> float:
         20 * math.log10(distance_m) +
         20 * math.log10(f_hz) +
         20 * math.log10(4 * math.pi / C)
+        - tx_gain_dbi 
+        - rx_gain_dbi
     )
 
 
@@ -64,8 +66,8 @@ def calculate_link_budget(
     distance_m: float,
     freq_mhz: int,
     modem_preset: str,
-    tx_power_dbm: float,
-    tx_gain_dbi: float,
+    tx_power_dbm: float = 20.0,
+    tx_gain_dbi: float = 2.15,
     rx_gain_dbi: float = 2.15,
     additional_loss_db: float = 0.0,
 ) -> dict:
@@ -87,11 +89,11 @@ def calculate_link_budget(
         raise ValueError(f"Preset sconosciuto: {modem_preset}")
 
     sensitivity = preset_data["receiver_sensitivity_dbm"]
-    fspl = fspl_db(distance_m, freq_mhz)
+    fspl = fspl_db(distance_m, freq_mhz, tx_gain_dbi, rx_gain_dbi)
     atm = atmospheric_loss_db(distance_m, freq_mhz)
     erp = calculate_erp(tx_power_dbm, tx_gain_dbi)
 
-    rx_power = tx_power_dbm + tx_gain_dbi + rx_gain_dbi - fspl - atm - additional_loss_db
+    rx_power = tx_power_dbm + tx_gain_dbi - fspl - atm + rx_gain_dbi - additional_loss_db
     margin = rx_power - sensitivity
 
     return {
