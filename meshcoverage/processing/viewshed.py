@@ -456,7 +456,7 @@ def compute_viewshed(
         progress_callback: callable(done, total) per aggiornamento progresso
     """
     from multiprocessing.shared_memory import SharedMemory
-    from meshcoverage.processing.dem_handler import get_dem_handler
+    from meshcoverage.processing.dem_handler import get_dem_handler, get_dsm_handler
     from meshcoverage.models.node import MODEM_PRESETS
 
     if n_workers <= 0:
