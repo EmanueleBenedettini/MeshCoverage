@@ -2,10 +2,11 @@
 API for aggregated coverage heatmaps.
 
 Endpoints:
-  GET /api/heatmaps                          — list available heatmaps
-  GET /api/heatmaps/{freq}/{preset}          — GeoJSON heatmap for freq+preset
-  GET /api/heatmaps/{freq}/{preset}/metadata — heatmap metadata
-  POST /api/heatmaps/generate                — regenerate all heatmaps
+  GET /api/heatmaps                               — list available heatmaps
+  GET /api/heatmaps/{freq}/{preset}               — GeoJSON heatmap for freq+preset
+  GET /api/heatmaps/{freq}/{preset}/metadata      — heatmap metadata
+  GET /api/heatmaps/{freq}/{preset}/shadows       — GeoJSON shadow zones   ← NEW
+  POST /api/heatmaps/generate                     — regenerate all heatmaps
 """
 from __future__ import annotations
 import json
@@ -31,16 +32,17 @@ def _heatmap_meta_path(freq: int, preset: str) -> Path:
     return settings.heatmaps_dir / f"heatmap_{freq}_{preset}_meta.json"
 
 
+def _shadow_path(freq: int, preset: str) -> Path:
+    return settings.heatmaps_dir / f"shadows_{freq}_{preset}.geojson"
+
+
 @router.get("")
 async def list_heatmaps():
-    """
-    Lists all available heatmaps with frequency, preset and basic metadata.
-    """
+    """Lists all available heatmaps with frequency, preset and basic metadata."""
     available = []
     for f in settings.heatmaps_dir.glob("heatmap_*_*.geojson"):
-        # Parse filename: heatmap_868_MEDIUM_FAST.geojson
         stem = f.stem  # heatmap_868_MEDIUM_FAST
-        parts = stem.split("_", 2)  # ["heatmap", "868", "MEDIUM_FAST"]
+        parts = stem.split("_", 2)
         if len(parts) < 3:
             continue
         try:
@@ -62,6 +64,8 @@ async def list_heatmaps():
             "generated_at": meta.get("generated_at"),
             "node_count": meta.get("node_count"),
             "point_count": meta.get("point_count"),
+            "shadow_point_count": meta.get("shadow_point_count"),
+            "has_shadows": _shadow_path(freq, preset).exists(),
         })
 
     available.sort(key=lambda x: (x["frequency_mhz"], x["modem_preset"]))
@@ -79,6 +83,84 @@ async def get_heatmap_metadata(freq: int, preset: str):
         )
     with open(meta_path) as f:
         return json.load(f)
+
+
+@router.get("/{freq}/{preset}/shadows")
+async def get_shadow_zones(
+    freq: int,
+    preset: str,
+    bbox: Optional[str] = Query(
+        default=None,
+        description="Bounding box: 'minlon,minlat,maxlon,maxlat'"
+    ),
+    max_distance_km: float = Query(
+        default=None,
+        description="Only include shadow zones within this distance from any node (km)"
+    ),
+):
+    """
+    Returns aggregated terrain shadow zones as GeoJSON.
+
+    Shadow zones are areas within the analysis range where terrain blocks
+    line of sight from every node on this frequency+preset combination.
+    These are displayed on the map with a distinct hatched/dark overlay
+    to make dead zones visually obvious.
+
+    Points that are covered by at least one node are excluded — only
+    genuinely unreachable terrain shadows appear here.
+    """
+    path = _shadow_path(freq, preset)
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Shadow data for {freq}MHz / {preset} not found. "
+                "Run calculation first (shadows are generated alongside heatmaps)."
+            )
+        )
+
+    # Serve file directly if no filters requested
+    if bbox is None and max_distance_km is None:
+        return FileResponse(
+            path,
+            media_type="application/geo+json",
+            filename=f"shadows_{freq}_{preset}.geojson",
+        )
+
+    with open(path) as f:
+        geojson = json.load(f)
+
+    features = geojson.get("features", [])
+
+    if max_distance_km is not None:
+        max_dist_m = max_distance_km * 1000.0
+        features = [
+            feat for feat in features
+            if feat["properties"].get("distance_m", 0) <= max_dist_m
+        ]
+
+    if bbox:
+        try:
+            minlon, minlat, maxlon, maxlat = map(float, bbox.split(","))
+            features = [
+                feat for feat in features
+                if (minlon <= feat["geometry"]["coordinates"][0] <= maxlon and
+                    minlat <= feat["geometry"]["coordinates"][1] <= maxlat)
+            ]
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid bbox. Format: minlon,minlat,maxlon,maxlat"
+            )
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "properties": {
+            **geojson.get("properties", {}),
+            "filtered_count": len(features),
+        },
+    }
 
 
 @router.get("/{freq}/{preset}")
@@ -106,7 +188,7 @@ async def get_heatmap(
             detail=f"Heatmap {freq}MHz / {preset} not found. Start calculation first."
         )
 
-    # If no filters, serve the file directly
+    # Serve file directly when no filters needed
     if min_budget is None and bbox is None:
         return FileResponse(
             path,
@@ -137,7 +219,10 @@ async def get_heatmap(
                     filtered.append(feat)
             features = filtered
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid bbox. Format: minlon,minlat,maxlon,maxlat")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid bbox. Format: minlon,minlat,maxlon,maxlat"
+            )
 
     return {
         "type": "FeatureCollection",
@@ -152,16 +237,16 @@ async def get_heatmap(
 @router.post("/generate")
 async def generate_heatmaps(background_tasks: BackgroundTasks):
     """
-    Regenerates all aggregated heatmaps from saved coverage data.
+    Regenerates all aggregated heatmaps (and shadow zones) from saved coverage data.
     Executed in background.
     """
     async def _run():
         from meshcoverage.processing.heatmap_generator import generate_heatmaps as _gen
         try:
             _gen()
-            log.info("Heatmaps regenerated successfully")
+            log.info("Heatmaps and shadow zones regenerated successfully")
         except Exception as e:
             log.error(f"Error generating heatmaps: {e}", exc_info=True)
 
     background_tasks.add_task(_run)
-    return {"started": True, "message": "Heatmap generation started in background"}
+    return {"started": True, "message": "Heatmap + shadow zone generation started in background"}
