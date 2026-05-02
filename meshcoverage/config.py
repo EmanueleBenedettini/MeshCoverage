@@ -42,20 +42,46 @@ class Settings(BaseSettings):
     # Scheduling
     compute_schedule: str = Field(default="0 3 * * *")
 
-    # DEM
+    # DEM — bare-earth terrain model (required)
     dem_dir: Path = Field(default=Path("./data/dem"))
     dem_resolution: int = Field(default=30)   # metres
 
+    # DSM — surface model with buildings and vegetation (optional, Change F)
+    #
+    # When set, obstacle heights along the signal path are read from the DSM
+    # (which includes buildings, trees, etc.) instead of the bare-earth DTM.
+    # TX and RX ground elevations always use the DTM so that antenna height
+    # above ground and receiver height are measured correctly.
+    #
+    # Recommended free sources (GeoTIFF, place tiles in this directory):
+    #   - Copernicus DEM GLO-30 DSM (global, 30 m):
+    #       https://spacedata.copernicus.eu/collections/copernicus-digital-elevation-model
+    #   - ALOS AW3D30 (global, 30 m):
+    #       https://www.eorc.jaxa.jp/ALOS/en/aw3d30/
+    #   - Local LiDAR DSM from national mapping agencies (best accuracy).
+    #
+    # Leave unset (or empty) to use bare-earth DTM only.
+    dsm_dir: Optional[Path] = Field(
+        default=None,
+        description=(
+            "Directory containing DSM GeoTIFF files (Digital Surface Model — "
+            "includes buildings and vegetation). Optional. When provided, "
+            "obstacle heights along the signal path use the DSM, improving "
+            "accuracy in urban and forested areas. TX/RX ground elevations "
+            "always come from the bare-earth DTM."
+        ),
+    )
+
     # Coverage calculation
-    max_workers: int = Field(default=0)       # 0 = auto (all cores)
-    max_range_km: float = Field(default=50.0) # Maximum analysis distance
-    receiver_height_m: float = Field(default=1.5)   # Receiver height
-    receiver_gain_dbi: float = Field(default=2.15)  # Receiver antenna gain
-    min_link_budget_db: float = Field(default=0.0)  # Minimum margin for "coverage"
-    erp_warning_dbm: float = Field(default=27.0)    # ERP warning threshold
+    max_workers: int = Field(default=0)
+    max_range_km: float = Field(default=50.0)
+    receiver_height_m: float = Field(default=1.5)
+    receiver_gain_dbi: float = Field(default=2.15)
+    min_link_budget_db: float = Field(default=0.0)
+    erp_warning_dbm: float = Field(default=27.0)
 
     # Heatmap
-    heatmap_resolution_m: float = Field(default=100.0)  # heatmap grid resolution
+    heatmap_resolution_m: float = Field(default=100.0)
 
     @property
     def nodes_file(self) -> Path:
@@ -75,13 +101,16 @@ class Settings(BaseSettings):
 
     def ensure_dirs(self):
         """Creates all necessary directories if they do not exist."""
-        for d in [
+        dirs = [
             self.data_dir / "nodes",
             self.coverage_dir,
             self.heatmaps_dir,
             self.links_dir,
             self.dem_dir,
-        ]:
+        ]
+        if self.dsm_dir:
+            dirs.append(self.dsm_dir)
+        for d in dirs:
             d.mkdir(parents=True, exist_ok=True)
 
 

@@ -1,33 +1,27 @@
 """
 Calcolo viewshed (analisi di visibilità) parallelizzato.
 
-  DEM in SharedMemory — l'intera area di analisi viene caricata in un
+Ottimizzazioni e funzionalità:
+
+  DEM/DSM in SharedMemory — l'intera area di analisi viene caricata in
       array numpy nel processo padre e condivisa con i worker via
-      multiprocessing.shared_memory.  I worker non aprono più rasterio né
-      reinizializzano DEMHandler: accedono direttamente alla RAM condivisa.
-        Algoritmo:
-        1. Genera una griglia di punti target nell'area di interesse
-        2. Per ogni punto target, estrae il profilo di elevazione DEM
-        3. Verifica LOS e clearance zona di Fresnel
-        4. Calcola link budget per i punti raggiungibili
-        5. Salva risultati in formato compresso (.npz)
-            — include anche le shadow zone (punti senza LOS)
+      multiprocessing.shared_memory.  I worker non aprono rasterio.
 
   Lettura windowed — load_area_array() esegue un singolo reproject/read
-      per dataset invece di N letture puntuali (Window(col,row,1,1)).
-      Il profilo di elevazione è estratto con interpolazione bilineare
-      vettorizzata sull'array numpy in memoria.
+      per dataset.  Il profilo di elevazione è estratto con interpolazione
+      bilineare vettorizzata sull'array numpy in memoria.
+
+  DSM clutter layer — quando MESHCOVERAGE_DSM_DIR è configurato, le
+      altezze degli ostacoli lungo il percorso (edifici, alberi) sono lette
+      dal DSM (Digital Surface Model) anziché dal DTM bare-earth.
+      Le elevazioni TX e RX continuano a usare il DTM in modo che l'altezza
+      dell'antenna dal suolo e i 1.5 m del ricevitore siano misurati
+      correttamente.
+      Se il DSM non copre un punto del profilo, si cade in fallback sul DTM.
 
   Pre-filtro free-space — prima di qualsiasi accesso DEM, ogni worker
       calcola il margine di link budget in condizioni di spazio libero ideale.
-      Se il margine è già inferiore a -20 dB rispetto alla sensibilità, il
-      punto viene scartato immediatamente (nessuna propagazione RF possibile
-      nemmeno con LOS perfetto).
-
-  NOTE ( TODO — non implementato):
-      Per ambienti urbani o forestati, l'accuratezza potrebbe essere migliorata
-      sostituendo il DTM bare-earth con un DSM (Digital Surface Model) che
-      include l'altezza di edifici e alberi sopra il terreno.
+      Se è già < -20 dB il punto viene scartato senza toccare gli array.
 """
 from __future__ import annotations
 import logging
@@ -41,8 +35,7 @@ from typing import Optional
 import numpy as np
 
 from meshcoverage.processing.dem_handler import (
-    haversine_m, bearing_deg, earth_bulge_m, destination_point,
-    EARTH_RADIUS_M,
+    haversine_m, bearing_deg, earth_bulge_m, EARTH_RADIUS_M,
 )
 from meshcoverage.processing.fresnel import check_los, check_fresnel_clearance
 from meshcoverage.processing.link_budget import (
@@ -53,89 +46,124 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Per-worker shared state (populated once by _worker_init)
+# Per-worker shared state
 # ---------------------------------------------------------------------------
 
 _worker_state: dict = {}
 
 
 def _worker_init(
-    shm_name: str,
-    shape: tuple,
-    dtype_str: str,
-    dem_meta: dict,
+    # DTM shared memory (always present)
+    dtm_shm_name: str,
+    dtm_shape: tuple,
+    dtm_dtype: str,
+    dtm_meta: dict,
+    # DSM shared memory (optional — empty string when not available)
+    dsm_shm_name: str,
+    dsm_shape: tuple,
+    dsm_dtype: str,
+    dsm_meta: Optional[dict],
+    # Preset sensitivity for pre-filter (H)
     sensitivity_dbm: float,
 ) -> None:
     """
-    Called once per worker process by multiprocessing.Pool.
-    Attaches to the SharedMemory block created in the parent process and
-    stores a numpy view + metadata in the module-level _worker_state dict.
-    Workers never open rasterio datasets — they read from shared RAM only.
+    Called once per worker process.
+    Attaches to both SharedMemory blocks (DTM always, DSM when available).
     """
     from multiprocessing.shared_memory import SharedMemory
 
     global _worker_state
-    shm = SharedMemory(name=shm_name, create=False)
-    arr = np.ndarray(shape, dtype=np.dtype(dtype_str), buffer=shm.buf)
+
+    dtm_shm = SharedMemory(name=dtm_shm_name, create=False)
+    dtm_arr = np.ndarray(dtm_shape, dtype=np.dtype(dtm_dtype), buffer=dtm_shm.buf)
+
+    dsm_shm = dsm_arr = None
+    if dsm_shm_name:
+        dsm_shm = SharedMemory(name=dsm_shm_name, create=False)
+        dsm_arr = np.ndarray(dsm_shape, dtype=np.dtype(dsm_dtype), buffer=dsm_shm.buf)
+
     _worker_state = {
-        'shm': shm,           # keep reference alive for the lifetime of the worker
-        'arr': arr,
-        'meta': dem_meta,
+        'dtm_shm':  dtm_shm,
+        'dtm_arr':  dtm_arr,
+        'dtm_meta': dtm_meta,
+        'dsm_shm':  dsm_shm,
+        'dsm_arr':  dsm_arr,
+        'dsm_meta': dsm_meta,
         'sensitivity_dbm': sensitivity_dbm,
     }
 
 
 # ---------------------------------------------------------------------------
-# Array-based elevation helpers (run inside worker processes)
+# Array-based helpers (run inside worker processes)
 # ---------------------------------------------------------------------------
 
-def _arr_elevation(lat: float, lon: float) -> Optional[float]:
-    """
-    Bilinear interpolation of elevation at (lat, lon) from the shared array.
-    Returns None when the coordinate is outside the array or the value is NaN.
-    """
-    meta = _worker_state['meta']
-    arr  = _worker_state['arr']
-
+def _bilinear(arr: np.ndarray, meta: dict, lat: float, lon: float) -> Optional[float]:
+    """Bilinear interpolation on a numpy array using array metadata."""
     if (lat < meta['lat_min'] or lat > meta['lat_max'] or
             lon < meta['lon_min'] or lon > meta['lon_max']):
         return None
 
-    row = (meta['lat_max'] - lat) / (meta['lat_max'] - meta['lat_min']) * (meta['n_rows'] - 1)
-    col = (lon - meta['lon_min']) / (meta['lon_max'] - meta['lon_min']) * (meta['n_cols'] - 1)
+    row = ((meta['lat_max'] - lat) /
+           (meta['lat_max'] - meta['lat_min'])) * (meta['n_rows'] - 1)
+    col = ((lon - meta['lon_min']) /
+           (meta['lon_max'] - meta['lon_min'])) * (meta['n_cols'] - 1)
 
     r0 = max(0, min(int(row), meta['n_rows'] - 2))
     c0 = max(0, min(int(col), meta['n_cols'] - 2))
     fr, fc = row - r0, col - c0
 
-    v = (arr[r0,     c0    ] * (1 - fr) * (1 - fc) +
-         arr[r0 + 1, c0    ] * fr       * (1 - fc) +
-         arr[r0,     c0 + 1] * (1 - fr) * fc +
-         arr[r0 + 1, c0 + 1] * fr       * fc)
-
-    v = float(v)
+    v = float(
+        arr[r0,     c0    ] * (1 - fr) * (1 - fc) +
+        arr[r0 + 1, c0    ] * fr       * (1 - fc) +
+        arr[r0,     c0 + 1] * (1 - fr) * fc +
+        arr[r0 + 1, c0 + 1] * fr       * fc
+    )
     return None if (math.isnan(v) or v < -1000.0) else v
+
+
+def _arr_elevation_dtm(lat: float, lon: float) -> Optional[float]:
+    """DTM elevation at a point — always uses bare-earth model."""
+    return _bilinear(
+        _worker_state['dtm_arr'], _worker_state['dtm_meta'], lat, lon
+    )
+
+
+def _arr_elevation_surface(lat: float, lon: float) -> Optional[float]:
+    """
+    Surface elevation at a point (Change F).
+
+    Returns DSM value when available, falls back to DTM.
+    Used for profile obstacle heights — includes buildings and trees.
+    """
+    if _worker_state['dsm_arr'] is not None and _worker_state['dsm_meta'] is not None:
+        v = _bilinear(
+            _worker_state['dsm_arr'], _worker_state['dsm_meta'], lat, lon
+        )
+        if v is not None:
+            return v
+    # Fall back to bare-earth DTM
+    return _arr_elevation_dtm(lat, lon)
 
 
 def _arr_profile(
     lat1: float, lon1: float,
     lat2: float, lon2: float,
     num_points: int,
+    use_dsm: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Vectorized elevation profile from the shared array using bilinear
-    interpolation.  No Python loops, no rasterio calls.
+    Vectorised elevation profile from shared array(s).
 
-    Returns (distances_m, lats, elevations) — same signature as
-    DEMHandler.get_profile() so the rest of the algorithm is unchanged.
+    When use_dsm is True, obstacle heights come from the DSM (Change F);
+    points not covered by the DSM fall back to DTM automatically via
+    _arr_elevation_surface.
+
+    Returns (distances_m, lats, elevations).
     """
-    meta = _worker_state['meta']
-    arr  = _worker_state['arr']
-
     lats = np.linspace(lat1, lat2, num_points)
     lons = np.linspace(lon1, lon2, num_points)
 
-    # Vectorised haversine distances from TX (avoids a Python loop)
+    # Vectorised haversine distances from TX
     dlat = np.radians(lats - lat1)
     dlon = np.radians(lons - lon1)
     a = (np.sin(dlat / 2) ** 2 +
@@ -143,39 +171,67 @@ def _arr_profile(
          np.sin(dlon / 2) ** 2)
     distances_m = 2.0 * EARTH_RADIUS_M * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
 
-    # Convert lat/lon → fractional array indices
+    if use_dsm and _worker_state['dsm_arr'] is not None:
+        # Try to interpolate the whole profile from the DSM in one pass,
+        # then patch any NaN cells with DTM values.
+        dsm_meta = _worker_state['dsm_meta']
+        dsm_arr  = _worker_state['dsm_arr']
+        dtm_meta = _worker_state['dtm_meta']
+        dtm_arr  = _worker_state['dtm_arr']
+
+        elevations = _vec_bilinear(dsm_arr, dsm_meta, lats, lons)
+        needs_dtm  = np.isnan(elevations) | (elevations < -1000.0)
+        if needs_dtm.any():
+            dtm_elev = _vec_bilinear(dtm_arr, dtm_meta, lats[needs_dtm], lons[needs_dtm])
+            elevations[needs_dtm] = dtm_elev
+    else:
+        # DTM only
+        dtm_meta = _worker_state['dtm_meta']
+        dtm_arr  = _worker_state['dtm_arr']
+        elevations = _vec_bilinear(dtm_arr, dtm_meta, lats, lons)
+
+    elevations[elevations < -1000.0] = np.nan
+    return distances_m, lats, elevations
+
+
+def _vec_bilinear(
+    arr: np.ndarray, meta: dict,
+    lats: np.ndarray, lons: np.ndarray,
+) -> np.ndarray:
+    """
+    Fully vectorised bilinear interpolation over arrays of lat/lon.
+    Out-of-bounds points are returned as NaN.
+    """
+    n_rows = meta['n_rows']
+    n_cols = meta['n_cols']
     lat_range = meta['lat_max'] - meta['lat_min']
     lon_range = meta['lon_max'] - meta['lon_min']
 
-    rows = (meta['lat_max'] - lats) / lat_range * (meta['n_rows'] - 1)
-    cols = (lons  - meta['lon_min']) / lon_range * (meta['n_cols'] - 1)
+    rows = (meta['lat_max'] - lats) / lat_range * (n_rows - 1)
+    cols = (lons - meta['lon_min']) / lon_range * (n_cols - 1)
 
-    # Mark out-of-bounds before clamping so we can NaN them later
     oob = (
         (lats < meta['lat_min']) | (lats > meta['lat_max']) |
         (lons < meta['lon_min']) | (lons > meta['lon_max'])
     )
 
-    rows = np.clip(rows, 0, meta['n_rows'] - 2)
-    cols = np.clip(cols, 0, meta['n_cols'] - 2)
+    rows = np.clip(rows, 0, n_rows - 2)
+    cols = np.clip(cols, 0, n_cols - 2)
 
     r0 = rows.astype(np.int32)
     c0 = cols.astype(np.int32)
     fr = rows - r0
     fc = cols - c0
 
-    # Bilinear interpolation (fully vectorised)
-    elevations = (
+    result = (
         arr[r0,     c0    ] * (1.0 - fr) * (1.0 - fc) +
         arr[r0 + 1, c0    ] * fr         * (1.0 - fc) +
         arr[r0,     c0 + 1] * (1.0 - fr) * fc +
         arr[r0 + 1, c0 + 1] * fr         * fc
     ).astype(np.float64)
 
-    # Mask invalid cells
-    elevations[oob | (elevations < -1000.0)] = np.nan
-
-    return distances_m, lats, elevations
+    result[oob] = np.nan
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -184,9 +240,16 @@ def _arr_profile(
 
 def _compute_point(args: tuple) -> Optional[dict]:
     """
-    Returns a dict with los=True (covered) or los=False (shadow zone).
-    Always returns a result for valid terrain points so shadow zones
-    can be recorded.
+    Evaluates a single target grid point.
+
+    Changes:
+      Free-space pre-filter — rejects points where even perfect LOS
+          cannot achieve link_margin > -20 dB.
+      Uses shared-memory arrays via _arr_elevation_dtm /
+          _arr_elevation_surface / _arr_profile.
+      _arr_profile does a single vectorised pass over in-RAM arrays.
+      Profile obstacle heights use DSM when available; TX/RX ground
+          elevation always uses bare-earth DTM.
     """
     (
         target_lat, target_lon,
@@ -196,6 +259,7 @@ def _compute_point(args: tuple) -> Optional[dict]:
         tx_power_dbm, ant_gain_dbi,
         ant_azimuth, ant_beamwidth,
         ant_gain_min, ant_gain_max,
+        has_dsm,
     ) = args
 
     try:
@@ -203,10 +267,7 @@ def _compute_point(args: tuple) -> Optional[dict]:
         if dist_m < 10.0:
             return None
 
-        # ── free-space pre-filter ───────────────────────────────
-        # Compute the best-case link margin (free space, no obstacles,
-        # full antenna gain).  If it is already < -20 dB below sensitivity,
-        # no terrain model will save this point — skip it entirely.
+        # ── Free-space pre-filter ──────────────────────────────────────
         _fspl = fspl_db(dist_m, freq_mhz)
         _atm  = atmospheric_loss_db(dist_m, freq_mhz)
         sensitivity_dbm = _worker_state.get('sensitivity_dbm', -140.0)
@@ -216,17 +277,14 @@ def _compute_point(args: tuple) -> Optional[dict]:
         )
         if best_case_margin < -20.0:
             return None
-        # ──────────────────────────────────────────────────────────────────
 
         brng = bearing_deg(ant_lat, ant_lon, target_lat, target_lon)
 
-        # Beamwidth sector check
         if ant_beamwidth < 360.0:
             diff = abs(((brng - ant_azimuth) + 180) % 360 - 180)
             if diff > ant_beamwidth / 2.0:
-                return None  # Fuori dal fascio — non è shadow zone, è semplicemente fuori settore
+                return None
 
-        # Directional antenna gain at this bearing
         if ant_beamwidth >= 360.0:
             gain_used = ant_gain_dbi
         else:
@@ -235,39 +293,42 @@ def _compute_point(args: tuple) -> Optional[dict]:
             factor = max(0.0, 1.0 - diff / half_bw)
             gain_used = ant_gain_min + factor * (ant_gain_max - ant_gain_min)
 
-        # ── array-based DEM lookups ───────────────────────────
-        target_elev = _arr_elevation(target_lat, target_lon)
-        if target_elev is None:
-            return None # Nessun dato DEM — non possiamo determinare se shadow
-        rx_alt_m = target_elev + rx_height_m 
+        # ── RX ground elevation from DTM; surface elevation from DSM ───
+        # The receiver is always at ground level + rx_height_m.
+        # We use the bare-earth DTM for this so the 1.5 m height is above
+        # real ground, not above a building roof or tree canopy.
+        target_ground = _arr_elevation_dtm(target_lat, target_lon)
+        if target_ground is None:
+            return None
+        rx_alt_m = target_ground + rx_height_m
 
+        # Profile obstacle heights: DSM when available, DTM otherwise (F).
         n_samples = max(50, int(dist_m / 30))
         distances_m, lats, elevations = _arr_profile(
-            ant_lat, ant_lon, target_lat, target_lon, n_samples
+            ant_lat, ant_lon, target_lat, target_lon, n_samples,
+            use_dsm=has_dsm,
         )
-        # ──────────────────────────────────────────────────────────────────
 
-        # Earth bulge correction (vectorised)
-        bulge = np.array([earth_bulge_m(d) for d in distances_m])
+        # ── Earth bulge (vectorised) ────────────────────────────────────────
+        bulge = np.fromiter(
+            (earth_bulge_m(d) for d in distances_m), dtype=np.float64, count=n_samples
+        )
         elevations_corr = np.where(np.isnan(elevations), np.nan, elevations + bulge)
 
-        # LOS check
+        # ── LOS and Fresnel ────────────────────────────────────────────────
         los_ok, _ = check_los(
             distances_m, elevations_corr,
             ant_alt_m, rx_alt_m, dist_m,
             apply_earth_bulge=False,
         )
         if not los_ok:
-            # Shadow zone: terreno blocca la visibilità
             return {
                 "lat": target_lat, "lon": target_lon,
                 "distance_m": dist_m, "los": False,
                 "fresnel_ok": False, "link_budget_db": float("-inf"),
                 "bearing": brng,
-                "shadow": True,  # <-- marcatore shadow zone
             }
 
-        # Fresnel clearance check
         fresnel_ok, _ = check_fresnel_clearance(
             distances_m, elevations_corr,
             ant_alt_m, rx_alt_m, dist_m, freq_mhz,
@@ -286,7 +347,6 @@ def _compute_point(args: tuple) -> Optional[dict]:
             "fresnel_ok": fresnel_ok,
             "link_budget_db": lb["link_margin_db"],
             "bearing": brng,
-            "shadow": False,
         }
 
     except Exception:
@@ -299,7 +359,6 @@ def _compute_point(args: tuple) -> Optional[dict]:
 
 @dataclass
 class ViewshedParams:
-    """Parametri per il calcolo viewshed di un singolo nodo."""
     node_id: str
     ant_lat: float
     ant_lon: float
@@ -322,7 +381,6 @@ class ViewshedParams:
 
 @dataclass
 class ViewshedResult:
-    """Risultato del calcolo viewshed per un punto target."""
     lat: float
     lon: float
     distance_m: float
@@ -341,11 +399,6 @@ def generate_target_grid(
     max_range_m: float, resolution_m: float,
     ant_azimuth: float = 0.0, ant_beamwidth: float = 360.0,
 ) -> list[tuple[float, float]]:
-    """
-    Genera la griglia di punti target nell'area di interesse.
-    Itera su tutti i punti della griglia senza settori angolari fissi.
-    """
-    # Dimensioni griglia in gradi
     lat_step = resolution_m / 111_000.0
     lon_step = resolution_m / (111_000.0 * math.cos(math.radians(center_lat)))
     n_steps  = int(max_range_m / resolution_m) + 1
@@ -369,6 +422,19 @@ def generate_target_grid(
             points.append((lat, lon))
 
     return points
+
+
+# ---------------------------------------------------------------------------
+# SharedMemory helpers
+# ---------------------------------------------------------------------------
+
+def _make_shm(arr: np.ndarray):
+    """Copy a numpy array into a new SharedMemory block."""
+    from multiprocessing.shared_memory import SharedMemory
+    shm = SharedMemory(create=True, size=int(arr.nbytes))
+    view = np.ndarray(arr.shape, dtype=arr.dtype, buffer=shm.buf)
+    view[:] = arr[:]
+    return shm, view
 
 
 # ---------------------------------------------------------------------------
@@ -403,10 +469,7 @@ def compute_viewshed(
         f"workers={n_workers}"
     )
 
-    # ── Step 1: load DEM area into numpy array ──────────────────────
-    dem = get_dem_handler()
-
-    # Bounding box with a small margin so edge points have a full profile
+    # ── Bounding box with margin ──────────────────────────────────────────
     margin_deg = (params.max_range_m / 111_000.0) * 1.05
     margin_lon = margin_deg / max(0.01, math.cos(math.radians(params.ant_lat)))
     lat_min = params.ant_lat - margin_deg
@@ -414,30 +477,50 @@ def compute_viewshed(
     lon_min = params.ant_lon - margin_lon
     lon_max = params.ant_lon + margin_lon
 
-    log.info(
-        f"Viewshed {params.node_id}: pre-caricamento DEM "
-        f"[{lat_min:.3f},{lon_min:.3f}]→[{lat_max:.3f},{lon_max:.3f}]"
-    )
-
-    dem_arr, dem_meta = dem.load_area_array(
+    # ── Step 1: load DTM ────────────────────────────────────────────
+    dem = get_dem_handler()
+    log.info(f"Viewshed {params.node_id}: caricamento DTM in memoria...")
+    dtm_arr, dtm_meta = dem.load_area_array(
         lat_min, lon_min, lat_max, lon_max,
         resolution_m=params.resolution_m,
     )
-
-    if dem_arr is None:
-        log.error(
-            f"Viewshed {params.node_id}: nessun dato DEM nell'area, "
-            f"impossibile calcolare"
-        )
+    if dtm_arr is None:
+        log.error(f"Viewshed {params.node_id}: nessun dato DTM, impossibile calcolare")
         return []
 
-    # ── Step 2: copy array into SharedMemory ──────────────────────────
-    shm = SharedMemory(create=True, size=int(dem_arr.nbytes))
-    shm_view = np.ndarray(dem_arr.shape, dtype=dem_arr.dtype, buffer=shm.buf)
-    shm_view[:] = dem_arr[:]
-    del dem_arr          # release local copy; shared copy is in shm
+    # ── Step 2: load DSM if available ────────────────────────────
+    dsm_handler = get_dsm_handler()
+    dsm_arr = dsm_meta = None
+    has_dsm = False
 
-    # Receiver sensitivity for the pre-filter
+    if dsm_handler is not None:
+        log.info(f"Viewshed {params.node_id}: caricamento DSM in memoria...")
+        dsm_arr, dsm_meta = dsm_handler.load_area_array(
+            lat_min, lon_min, lat_max, lon_max,
+            resolution_m=params.resolution_m,
+        )
+        if dsm_arr is not None:
+            has_dsm = True
+            log.info(
+                f"Viewshed {params.node_id}: DSM disponibile — "
+                f"ostacoli calcolati su superficie (edifici/vegetazione)"
+            )
+        else:
+            log.warning(
+                f"Viewshed {params.node_id}: DSM non copre l'area, "
+                f"si usa solo il DTM bare-earth"
+            )
+
+    # ── Step 3: copy arrays into SharedMemory (A) ─────────────────────────
+    dtm_shm, dtm_view = _make_shm(dtm_arr)
+    del dtm_arr
+
+    dsm_shm = dsm_view = None
+    if dsm_arr is not None:
+        dsm_shm, dsm_view = _make_shm(dsm_arr)
+        del dsm_arr
+
+    # Preset sensitivity for the free-space pre-filter
     preset_data     = MODEM_PRESETS.get(params.modem_preset, {})
     sensitivity_dbm = preset_data.get("receiver_sensitivity_dbm", -140.0)
 
@@ -450,8 +533,9 @@ def compute_viewshed(
     log.info(f"Viewshed {params.node_id}: {len(targets)} punti target da analizzare")
 
     if not targets:
-        shm.close()
-        shm.unlink()
+        dtm_shm.close(); dtm_shm.unlink()
+        if dsm_shm:
+            dsm_shm.close(); dsm_shm.unlink()
         return []
 
     ant_gain_min = (
@@ -474,6 +558,7 @@ def compute_viewshed(
             params.tx_power_dbm, params.ant_gain_dbi,
             params.ant_azimuth_deg, params.ant_beamwidth_deg,
             ant_gain_min, ant_gain_max,
+            has_dsm,
         )
         for lat, lon in targets
     ]
@@ -482,21 +567,23 @@ def compute_viewshed(
     done    = 0
     total   = len(worker_args)
 
-    # ── Step 3+4: worker pool with shared-memory initialiser ─────────
+    # ── Step 4+5: worker pool ─────────────────────────────────────────
     try:
         with mp.Pool(
             processes=n_workers,
             initializer=_worker_init,
             initargs=(
-                shm.name,
-                shm_view.shape,
-                str(shm_view.dtype),
-                dem_meta,
+                dtm_shm.name,
+                dtm_view.shape,
+                str(dtm_view.dtype),
+                dtm_meta,
+                dsm_shm.name if dsm_shm else "",
+                dsm_view.shape if dsm_view is not None else (0,),
+                str(dsm_view.dtype) if dsm_view is not None else "float32",
+                dsm_meta,
                 sensitivity_dbm,
             ),
         ) as pool:
-            # chunksize=50 amortises IPC overhead; workers are fast now that
-            # DEM I/O is eliminated.
             for result in pool.imap_unordered(
                 _compute_point, worker_args, chunksize=50
             ):
@@ -506,19 +593,21 @@ def compute_viewshed(
                 if progress_callback and done % 100 == 0:
                     progress_callback(done, total)
     finally:
-        # ── Step 5: always release SharedMemory ───────────────────────
-        shm.close()
-        shm.unlink()
+        # ── Step 6: always release SharedMemory ───────────────────────────
+        dtm_shm.close()
+        dtm_shm.unlink()
+        if dsm_shm:
+            dsm_shm.close()
+            dsm_shm.unlink()
 
     if progress_callback:
         progress_callback(total, total)
 
-    covered = len([r for r in results if r.get("los")])
-    shadow = len([r for r in results if r.get("shadow")])
+    fresnel_ok_count = sum(1 for r in results if r.get("fresnel_ok"))
+    dsm_note = " (con DSM clutter)" if has_dsm else " (DTM bare-earth)"
     log.info(
-        f"Viewshed {params.node_id}: {covered} punti coperti, "
-        f"{shadow} shadow zone "
-        f"({len([r for r in results if r.get('fresnel_ok')])} con Fresnel ok)"
+        f"Viewshed {params.node_id}{dsm_note}: "
+        f"{len(results)} punti coperti ({fresnel_ok_count} con Fresnel ok)"
     )
     return results
 
@@ -528,14 +617,9 @@ def compute_viewshed(
 # ---------------------------------------------------------------------------
 
 def save_viewshed(results: list[dict], output_path: Path, metadata: dict):
-    """
-    Salva i risultati del viewshed in formato NPZ compresso.
-    Separate arrays for covered points and shadow zones.
-    """
     if not results:
         np.savez_compressed(
             output_path,
-            # Covered points
             lats=np.array([]),
             lons=np.array([]),
             distances=np.array([]),
@@ -543,73 +627,37 @@ def save_viewshed(results: list[dict], output_path: Path, metadata: dict):
             fresnel_ok=np.array([], dtype=bool),
             link_budget=np.array([]),
             bearings=np.array([]),
-            # Shadow zones
-            shadow_lats=np.array([]),
-            shadow_lons=np.array([]),
-            shadow_distances=np.array([]),
             metadata=str(metadata),
         )
         return
 
-    # Separate covered vs shadow
-    covered = [r for r in results if r.get("los", False)]
-    shadow_pts = [r for r in results if r.get("shadow", False)]
-
-    # Covered point arrays
-    lats = np.array([r["lat"] for r in covered]) if covered else np.array([])
-    lons = np.array([r["lon"] for r in covered]) if covered else np.array([])
-    distances = np.array([r["distance_m"] for r in covered]) if covered else np.array([])
-    los = np.ones(len(covered), dtype=bool)
-    fresnel = np.array([r["fresnel_ok"] for r in covered], dtype=bool) if covered else np.array([], dtype=bool)
-    lb = np.array([r["link_budget_db"] for r in covered]) if covered else np.array([])
-    bearings = np.array([r["bearing"] for r in covered]) if covered else np.array([])
-
-    # Shadow zone arrays
-    shadow_lats = np.array([r["lat"] for r in shadow_pts]) if shadow_pts else np.array([])
-    shadow_lons = np.array([r["lon"] for r in shadow_pts]) if shadow_pts else np.array([])
-    shadow_distances = np.array([r["distance_m"] for r in shadow_pts]) if shadow_pts else np.array([])
-
     np.savez_compressed(
         output_path,
-        lats=lats, lons=lons,
-        distances=distances,
-        los=los, fresnel_ok=fresnel,
-        link_budget=lb,
-        bearings=bearings,
-        shadow_lats=shadow_lats,
-        shadow_lons=shadow_lons,
-        shadow_distances=shadow_distances,
+        lats=np.array([r["lat"]            for r in results]),
+        lons=np.array([r["lon"]            for r in results]),
+        distances=np.array([r["distance_m"]     for r in results]),
+        los=np.array([r["los"]             for r in results], dtype=bool),
+        fresnel_ok=np.array([r["fresnel_ok"]    for r in results], dtype=bool),
+        link_budget=np.array([r["link_budget_db"] for r in results]),
+        bearings=np.array([r["bearing"]        for r in results]),
         metadata=str(metadata),
     )
-    log.info(
-        f"Viewshed salvato: {output_path} "
-        f"({len(covered)} coperti, {len(shadow_pts)} shadow zone)"
-    )
+    log.info(f"Viewshed salvato: {output_path} ({len(results)} punti)")
 
 
 def load_viewshed(path: Path) -> Optional[dict]:
-    """
-    Carica i risultati di un viewshed salvato.
-    Returns dict with both covered and shadow_zone arrays.
-    Shadow arrays may be empty for files computed before this update.
-    """
     if not path.exists():
         return None
     try:
         data = np.load(path, allow_pickle=True)
         return {
-            # Covered / reachable points
-            "lats": data["lats"],
-            "lons": data["lons"],
-            "distances": data["distances"],
-            "los": data["los"],
-            "fresnel_ok": data["fresnel_ok"],
+            "lats":        data["lats"],
+            "lons":        data["lons"],
+            "distances":   data["distances"],
+            "los":         data["los"],
+            "fresnel_ok":  data["fresnel_ok"],
             "link_budget": data["link_budget"],
-            "bearings": data.get("bearings", np.array([])),
-            # Shadow zones (may not exist in older files)
-            "shadow_lats": data["shadow_lats"] if "shadow_lats" in data else np.array([]),
-            "shadow_lons": data["shadow_lons"] if "shadow_lons" in data else np.array([]),
-            "shadow_distances": data["shadow_distances"] if "shadow_distances" in data else np.array([]),
+            "bearings":    data.get("bearings", np.array([])),
         }
     except Exception as e:
         log.error(f"Errore caricamento viewshed {path}: {e}")

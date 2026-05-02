@@ -1,6 +1,23 @@
 """
-Gestione file DEM (Digital Elevation Model) in formato GeoTIFF.
+Gestione file DEM/DSM (Digital Elevation/Surface Model) in formato GeoTIFF.
 Supporta file multipli affiancati, indicizzati automaticamente.
+
+  Two independent handler singletons are provided:
+    get_dem_handler() → bare-earth DTM  (always required)
+    get_dsm_handler() → surface model   (optional; returns None when
+                         MESHCOVERAGE_DSM_DIR is not set or empty)
+
+  The DSM is used by the viewshed algorithm for obstacle heights along the
+  propagation path (buildings, trees).  TX and RX ground elevations always
+  come from the bare-earth DTM so antenna height above ground and the 1.5 m
+  receiver height are measured correctly.
+
+  Recommended DSM sources (GeoTIFF, place tiles in dsm_dir):
+    - Copernicus DEM GLO-30 DSM (free, global, 30 m):
+        https://spacedata.copernicus.eu/collections/copernicus-digital-elevation-model
+    - ALOS AW3D30 (free, global, 30 m):
+        https://www.eorc.jaxa.jp/ALOS/en/aw3d30/
+    - Local LiDAR DSM from national mapping agencies (best accuracy).
 """
 from __future__ import annotations
 import logging
@@ -14,21 +31,19 @@ log = logging.getLogger(__name__)
 
 try:
     import rasterio
-    from rasterio.transform import rowcol, xy
-    from rasterio.merge import merge as rasterio_merge
-    from rasterio.windows import from_bounds
+    from rasterio.transform import rowcol
     from pyproj import Transformer
     HAS_RASTERIO = True
 except ImportError:
     HAS_RASTERIO = False
-    log.warning("rasterio non disponibile. Funzionalità DEM disabilitate.")
+    log.warning("rasterio non disponibile. Funzionalità DEM/DSM disabilitate.")
 
 
 class DEMHandler:
     """
-    Gestore file DEM.
-    Carica e indicizza tutti i file GeoTIFF in una directory.
-    Fornisce query di elevazione per coordinate lat/lon.
+    Generic handler for DEM or DSM GeoTIFF files.
+    Loads and indexes all files in a directory.
+    Provides elevation queries by lat/lon and bulk area loading.
     """
 
     def __init__(self, dem_dir: Path):
@@ -39,21 +54,24 @@ class DEMHandler:
         self._initialized = False
 
     def initialize(self):
-        """Scansiona la directory DEM e indicizza tutti i file GeoTIFF."""
+        """Scan directory and index all GeoTIFF files."""
         if not HAS_RASTERIO:
-            log.error("rasterio non disponibile, impossibile usare DEM")
+            log.error("rasterio non disponibile, impossibile usare DEM/DSM")
             return
 
         self._datasets = []
         self._bounds = []
         self._resolutions = []
 
-        tif_files = sorted(self.dem_dir.glob("*.tif")) + sorted(self.dem_dir.glob("*.tiff"))
+        tif_files = (
+            sorted(self.dem_dir.glob("*.tif")) +
+            sorted(self.dem_dir.glob("*.tiff"))
+        )
         if not tif_files:
-            log.warning(f"Nessun file DEM trovato in {self.dem_dir}")
+            log.warning(f"Nessun file trovato in {self.dem_dir}")
             return
 
-        log.info(f"Trovati {len(tif_files)} file DEM in {self.dem_dir}")
+        log.info(f"Trovati {len(tif_files)} file in {self.dem_dir}")
 
         dem_entries = []
         for f in tif_files:
@@ -64,10 +82,12 @@ class DEMHandler:
                         ds.crs, "EPSG:4326", always_xy=True
                     )
                     left, top = transformer.transform(ds.bounds.left, ds.bounds.top)
-                    right, bottom = transformer.transform(ds.bounds.right, ds.bounds.bottom)
+                    right, bottom = transformer.transform(
+                        ds.bounds.right, ds.bounds.bottom
+                    )
                     bounds_ll = (
                         min(left, right), min(top, bottom),
-                        max(left, right), max(top, bottom)
+                        max(left, right), max(top, bottom),
                     )
                 else:
                     b = ds.bounds
@@ -75,23 +95,29 @@ class DEMHandler:
 
                 resolution_m = (abs(ds.transform[0]) + abs(ds.transform[4])) / 2.0
                 dem_entries.append((ds, bounds_ll, resolution_m, f.name))
-                log.debug(f"DEM caricato: {f.name} bounds={bounds_ll} res={resolution_m:.2f}m")
+                log.debug(
+                    f"File caricato: {f.name} "
+                    f"bounds={bounds_ll} res={resolution_m:.2f}m"
+                )
             except Exception as e:
-                log.error(f"Errore apertura DEM {f}: {e}")
+                log.error(f"Errore apertura {f}: {e}")
 
-        # Ordina per risoluzione crescente (più alta risoluzione prima)
+        # Sort ascending by resolution so highest-res data comes first in the list
         dem_entries.sort(key=lambda x: x[2])
 
-        for ds, bounds, res, name in dem_entries:
+        for ds, bounds, res, _ in dem_entries:
             self._datasets.append(ds)
             self._bounds.append(bounds)
             self._resolutions.append(res)
 
         self._initialized = True
-        log.info(f"Inizializzati {len(self._datasets)} file DEM (ordinati per risoluzione)")
+        log.info(
+            f"Inizializzati {len(self._datasets)} file in {self.dem_dir} "
+            f"(ordinati per risoluzione)"
+        )
 
     # ------------------------------------------------------------------
-    # load entire area into a numpy array in one I/O pass
+    # Bulk area load — single I/O pass per dataset (Change C)
     # ------------------------------------------------------------------
 
     def load_area_array(
@@ -101,29 +127,21 @@ class DEMHandler:
         resolution_m: float = 30.0,
     ) -> tuple[Optional[np.ndarray], Optional[dict]]:
         """
-        Load DEM elevation data for a bounding box into a float32 numpy array
-        using a single windowed read per dataset (Change C).
+        Load elevation data for a bounding box into a float32 numpy array
+        using a single windowed reproject per dataset (Change C).
 
-        The result array has shape (n_rows, n_cols) where:
-          - row 0  → lat_max (north edge)
-          - row -1 → lat_min (south edge)
-          - col 0  → lon_min (west edge)
-          - col -1 → lon_max (east edge)
+        Array layout:
+          row 0   → lat_max (north)   col 0   → lon_min (west)
+          row n-1 → lat_min (south)   col m-1 → lon_max (east)
 
-        Nodata / below-sea-floor values are stored as NaN.
-        Returns (None, None) if no DEM covers the requested area.
-
-        NOTE (Change F — not implemented):
-          For improved accuracy in urban/forested areas, a DSM (Digital Surface
-          Model) clutter layer could be passed here alongside the bare-earth DTM
-          to account for building and tree heights above the terrain.
+        Nodata / sub-ocean values stored as NaN.
+        Returns (None, None) when no dataset covers the area.
         """
         if not HAS_RASTERIO:
             return None, None
         if not self._initialized or not self._datasets:
             return None, None
 
-        # Find datasets that overlap the requested bbox
         relevant = [
             ds for ds, bounds in zip(self._datasets, self._bounds)
             if (bounds[0] <= lon_max and bounds[2] >= lon_min and
@@ -131,12 +149,11 @@ class DEMHandler:
         ]
         if not relevant:
             log.warning(
-                f"load_area_array: nessun dataset DEM copre "
+                f"load_area_array ({self.dem_dir.name}): nessun dataset copre "
                 f"[{lat_min:.3f},{lon_min:.3f}]→[{lat_max:.3f},{lon_max:.3f}]"
             )
             return None, None
 
-        # Target WGS84 grid dimensions
         lat_res = resolution_m / 111_000.0
         lon_res = resolution_m / (
             111_000.0 * math.cos(math.radians((lat_min + lat_max) / 2))
@@ -155,14 +172,12 @@ class DEMHandler:
         )
         target_crs = CRS.from_epsg(4326)
 
-        # Process datasets from lowest to highest resolution so the
-        # highest-resolution data overwrites lower-res data in overlapping cells.
+        # Process lowest-res → highest-res so highest-res wins in overlaps
         for ds in reversed(relevant):
             try:
                 dst_arr = np.full((n_rows, n_cols), np.nan, dtype=np.float32)
                 nodata_val = ds.nodata if ds.nodata is not None else -9999.0
 
-                # Single windowed read + reproject to WGS84 target grid (Change C)
                 reproject(
                     source=rasterio.band(ds, 1),
                     destination=dst_arr,
@@ -175,47 +190,49 @@ class DEMHandler:
                     dst_nodata=np.nan,
                 )
 
-                # Write valid pixels into result (ignores nodata and sub-ocean values)
                 valid = ~np.isnan(dst_arr) & (dst_arr > -1000.0)
                 result[valid] = dst_arr[valid]
-
             except Exception as e:
-                log.warning(f"load_area_array: errore reproiezione dataset: {e}")
+                log.warning(
+                    f"load_area_array ({self.dem_dir.name}): "
+                    f"errore reproiezione: {e}"
+                )
                 continue
 
         if np.all(np.isnan(result)):
-            log.warning("load_area_array: nessun dato DEM valido nell'area richiesta")
+            log.warning(
+                f"load_area_array ({self.dem_dir.name}): "
+                f"nessun dato valido nell'area richiesta"
+            )
             return None, None
 
         meta = {
-            'lat_min': float(lat_min),
-            'lat_max': float(lat_max),
-            'lon_min': float(lon_min),
-            'lon_max': float(lon_max),
-            'n_rows': int(n_rows),
-            'n_cols': int(n_cols),
+            'lat_min':      float(lat_min),
+            'lat_max':      float(lat_max),
+            'lon_min':      float(lon_min),
+            'lon_max':      float(lon_max),
+            'n_rows':       int(n_rows),
+            'n_cols':       int(n_cols),
             'resolution_m': float(resolution_m),
         }
 
         valid_count = int(np.sum(~np.isnan(result)))
         log.info(
-            f"load_area_array: {n_rows}×{n_cols} grid "
+            f"load_area_array ({self.dem_dir.name}): "
+            f"{n_rows}×{n_cols} grid "
             f"({valid_count}/{n_rows * n_cols} celle valide, "
             f"{result.nbytes / 1024 / 1024:.1f} MB)"
         )
         return result, meta
 
     # ------------------------------------------------------------------
-    # Original per-point methods (kept for fallback and utility use)
+    # Per-point methods (kept for fallback / utility use outside viewshed)
     # ------------------------------------------------------------------
 
     def get_elevation(self, lat: float, lon: float) -> Optional[float]:
         """
-        Restituisce l'elevazione (metri slm) per le coordinate date.
-        Prioritizza file ad alta risoluzione.
-
-        NOTE: in the hot path (viewshed calculation) prefer load_area_array()
-        + _arr_elevation() which avoids per-point I/O entirely.
+        Point elevation query (per-call rasterio Window reads).
+        Prefer load_area_array() + shared memory in the viewshed hot path.
         """
         if not self._initialized or not self._datasets:
             return None
@@ -234,7 +251,10 @@ class DEMHandler:
 
                     row, col = rowcol(ds.transform, x, y)
                     if 0 <= row < ds.height and 0 <= col < ds.width:
-                        val = ds.read(1, window=rasterio.windows.Window(col, row, 1, 1))
+                        val = ds.read(
+                            1,
+                            window=rasterio.windows.Window(col, row, 1, 1)
+                        )
                         elev = float(val[0, 0])
                         if ds.nodata is not None and abs(elev - ds.nodata) < 1:
                             continue
@@ -252,10 +272,7 @@ class DEMHandler:
         lat2: float, lon2: float,
         num_points: int = 500,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Estrae il profilo di elevazione tra due punti.
-        NOTE: prefer _arr_profile() in the viewshed hot path.
-        """
+        """Point-by-point profile. Use _arr_profile in viewshed hot path."""
         lats = np.linspace(lat1, lat2, num_points)
         lons = np.linspace(lon1, lon2, num_points)
 
@@ -278,7 +295,7 @@ class DEMHandler:
         lat_max: float, lon_max: float,
         resolution_m: float = 30.0,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Restituisce una griglia di elevazioni per un'area."""
+        """Elevation grid for an area."""
         dy = haversine_m(lat_min, lon_min, lat_max, lon_min)
         dx = haversine_m(lat_min, lon_min, lat_min, lon_max)
         n_lat = max(10, int(dy / resolution_m))
@@ -298,7 +315,7 @@ class DEMHandler:
         return lats_grid, lons_grid, elevations
 
     def covers(self, lat: float, lon: float) -> bool:
-        """True se le coordinate sono coperte da almeno un file DEM."""
+        """True if the coordinates fall within at least one loaded file."""
         if not self._initialized or not self._datasets:
             return False
         for bounds in self._bounds:
@@ -308,12 +325,17 @@ class DEMHandler:
         return False
 
     @property
+    def is_available(self) -> bool:
+        """True when at least one dataset is loaded."""
+        return self._initialized and len(self._datasets) > 0
+
+    @property
     def coverage_bounds(self) -> list[tuple]:
-        """Lista di bounding box (minlon, minlat, maxlon, maxlat) dei file DEM."""
+        """List of (minlon, minlat, maxlon, maxlat) for each loaded file."""
         return list(self._bounds)
 
     def close(self):
-        """Chiude tutti i dataset aperti."""
+        """Close all open datasets."""
         for ds in self._datasets:
             try:
                 ds.close()
@@ -323,7 +345,7 @@ class DEMHandler:
 
 
 # ---------------------------------------------------------------------------
-# Funzioni geometriche
+# Geometry helpers
 # ---------------------------------------------------------------------------
 
 EARTH_RADIUS_M = 6_371_000.0
@@ -332,7 +354,6 @@ K_EARTH_EFFECTIVE_M = EARTH_RADIUS_M * K_EFFECTIVE
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Distanza in metri tra due punti lat/lon (formula haversine)."""
     R = EARTH_RADIUS_M
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
@@ -343,35 +364,27 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Calcola il bearing (azimuth) da punto 1 a punto 2 in gradi [0, 360)."""
     dlon = math.radians(lon2 - lon1)
     lat1r = math.radians(lat1)
     lat2r = math.radians(lat2)
     x = math.sin(dlon) * math.cos(lat2r)
     y = (math.cos(lat1r) * math.sin(lat2r) -
          math.sin(lat1r) * math.cos(lat2r) * math.cos(dlon))
-    bearing = math.degrees(math.atan2(x, y))
-    return (bearing + 360) % 360
+    return (math.degrees(math.atan2(x, y)) + 360) % 360
 
 
 def earth_bulge_m(distance_m: float) -> float:
-    """
-    Rigonfiamento terrestre a una data distanza.
-    Con fattore di rifrazione atmosferica standard (k=4/3).
-    """
     return (distance_m ** 2) / (2 * K_EARTH_EFFECTIVE_M)
 
 
 def destination_point(
     lat: float, lon: float, bearing: float, distance_m: float
 ) -> tuple[float, float]:
-    """Calcola le coordinate di un punto a una certa distanza e direzione."""
     R = EARTH_RADIUS_M
     d = distance_m / R
     b = math.radians(bearing)
     lat1 = math.radians(lat)
     lon1 = math.radians(lon)
-
     lat2 = math.asin(
         math.sin(lat1) * math.cos(d) +
         math.cos(lat1) * math.sin(d) * math.cos(b)
@@ -383,15 +396,58 @@ def destination_point(
     return math.degrees(lat2), math.degrees(lon2)
 
 
-# Singleton globale
+# ---------------------------------------------------------------------------
+# Singletons
+# ---------------------------------------------------------------------------
+
 _dem_handler: Optional[DEMHandler] = None
+_dsm_handler: Optional[DEMHandler] = None
+_dsm_attempted: bool = False   # avoid repeating a failed init
 
 
 def get_dem_handler() -> DEMHandler:
-    """Restituisce l'istanza globale del DEMHandler (inizializzato se necessario)."""
+    """Global bare-earth DTM handler."""
     global _dem_handler
     if _dem_handler is None:
         from meshcoverage.config import settings
         _dem_handler = DEMHandler(settings.dem_dir)
         _dem_handler.initialize()
     return _dem_handler
+
+
+def get_dsm_handler() -> Optional[DEMHandler]:
+    """
+    Global DSM handler (Change F).
+
+    Returns None when MESHCOVERAGE_DSM_DIR is not configured or the directory
+    contains no GeoTIFF files.  The result is cached after the first call.
+    """
+    global _dsm_handler, _dsm_attempted
+    if _dsm_attempted:
+        return _dsm_handler
+
+    _dsm_attempted = True
+    from meshcoverage.config import settings
+
+    if not settings.dsm_dir:
+        log.info(
+            "DSM non configurato (MESHCOVERAGE_DSM_DIR non impostato). "
+            "Il calcolo userà solo il DTM bare-earth."
+        )
+        return None
+
+    handler = DEMHandler(settings.dsm_dir)
+    handler.initialize()
+
+    if not handler.is_available:
+        log.warning(
+            f"DSM configurato ({settings.dsm_dir}) ma nessun file GeoTIFF trovato. "
+            "Il calcolo userà solo il DTM bare-earth."
+        )
+        return None
+
+    _dsm_handler = handler
+    log.info(
+        f"DSM disponibile: {len(handler.coverage_bounds)} file in {settings.dsm_dir}"
+    )
+    return _dsm_handler
