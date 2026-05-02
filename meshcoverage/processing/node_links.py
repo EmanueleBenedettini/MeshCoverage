@@ -120,8 +120,8 @@ def _compute_link(node_a: Node, node_b: Node, dem) -> dict | None:
         "node_a_id": node_a.id,
         "node_b_id": node_b.id,
         "distance_km": round(dist_m / 1000, 3),
-        "los": True,
-        "fresnel_ok": fresnel_ok,
+        "los": True,    # Se siamo qui, LOS è verificato
+        "fresnel_ok": str(fresnel_ok),   # Anche se non è un requisito, lo segnaliamo
         "link_budget_a_to_b": lb_a_to_b["link_margin_db"],
         "link_budget_b_to_a": lb_b_to_a["link_margin_db"],
         "min_link_budget": round(min_lb, 2),
