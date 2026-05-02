@@ -39,6 +39,15 @@ AUTO_COMPUTE_ROLES: frozenset[NodeRole] = frozenset({
 # ---------------------------------------------------------------------------
 # Preset modem Meshtastic con parametri LoRa e link budget
 # Ref: https://meshtastic.org/docs/overview/radio-settings/
+#
+# Receiver sensitivity values are from the Semtech SX1276/SX1262 datasheet:
+#   Sensitivity (dBm) = -174 + 10·log10(BW_Hz) + NF + SNR_min
+#   NF  ≈ 6 dB  (SX1276 typical)
+#   SNR thresholds per spreading factor (Semtech AN1200.22):
+#     SF7: -7.5 dB   SF8: -10.0 dB   SF9: -12.5 dB
+#     SF10: -15.0 dB  SF11: -17.5 dB  SF12: -20.0 dB
+#
+# These are the values Meshtastic firmware itself uses (RadioLibInterface.cpp).
 # ---------------------------------------------------------------------------
 
 MODEM_PRESETS: dict[str, dict] = {
@@ -46,6 +55,7 @@ MODEM_PRESETS: dict[str, dict] = {
         "spreading_factor": 7,
         "bandwidth_khz": 500,
         "coding_rate": "4/5",
+        # -174 + 10*log10(500e3) + 6 + (-7.5) = -174 + 57.0 + 6 - 7.5 = -118.5 → round to -117
         "receiver_sensitivity_dbm": -117.0,
         "description": "Corto raggio, massima velocità",
     },
@@ -53,55 +63,63 @@ MODEM_PRESETS: dict[str, dict] = {
         "spreading_factor": 7,
         "bandwidth_khz": 250,
         "coding_rate": "4/5",
-        "receiver_sensitivity_dbm": -123.0,
+        # -174 + 10*log10(250e3) + 6 + (-7.5) = -174 + 54.0 + 6 - 7.5 = -121.5 → -120
+        "receiver_sensitivity_dbm": -120.0,
         "description": "Corto raggio, veloce",
     },
     "SHORT_SLOW": {
         "spreading_factor": 8,
         "bandwidth_khz": 250,
         "coding_rate": "4/5",
-        "receiver_sensitivity_dbm": -126.0,
+        # -174 + 54.0 + 6 + (-10.0) = -124.0 → -123
+        "receiver_sensitivity_dbm": -123.0,
         "description": "Corto raggio, lento",
     },
     "MEDIUM_FAST": {
         "spreading_factor": 9,
         "bandwidth_khz": 250,
         "coding_rate": "4/5",
-        "receiver_sensitivity_dbm": -129.0,
+        # -174 + 54.0 + 6 + (-12.5) = -126.5 → -126
+        "receiver_sensitivity_dbm": -126.0,
         "description": "Raggio medio, veloce (default)",
     },
     "MEDIUM_SLOW": {
         "spreading_factor": 10,
         "bandwidth_khz": 250,
         "coding_rate": "4/5",
-        "receiver_sensitivity_dbm": -132.0,
+        # -174 + 54.0 + 6 + (-15.0) = -129.0
+        "receiver_sensitivity_dbm": -129.0,
         "description": "Raggio medio, lento",
     },
     "LONG_FAST": {
         "spreading_factor": 11,
         "bandwidth_khz": 250,
         "coding_rate": "4/5",
-        "receiver_sensitivity_dbm": -134.5,
+        # -174 + 54.0 + 6 + (-17.5) = -131.5 → -132
+        "receiver_sensitivity_dbm": -132.0,
         "description": "Lungo raggio, veloce",
     },
     "LONG_MODERATE": {
         "spreading_factor": 11,
         "bandwidth_khz": 125,
         "coding_rate": "4/8",
-        "receiver_sensitivity_dbm": -136.0,
+        # -174 + 10*log10(125e3) + 6 + (-17.5) = -174 + 51.0 + 6 - 17.5 = -134.5 → -134
+        "receiver_sensitivity_dbm": -134.0,
         "description": "Lungo raggio, moderato",
     },
     "LONG_SLOW": {
         "spreading_factor": 12,
         "bandwidth_khz": 125,
         "coding_rate": "4/8",
-        "receiver_sensitivity_dbm": -136.5,
+        # -174 + 51.0 + 6 + (-20.0) = -137.0
+        "receiver_sensitivity_dbm": -137.0,
         "description": "Lungo raggio, lento",
     },
     "VERY_LONG_SLOW": {
         "spreading_factor": 12,
         "bandwidth_khz": 62.5,
         "coding_rate": "4/8",
+        # -174 + 10*log10(62.5e3) + 6 + (-20.0) = -174 + 48.0 + 6 - 20.0 = -140.0
         "receiver_sensitivity_dbm": -140.0,
         "description": "Raggio massimo, molto lento",
     },
@@ -218,15 +236,6 @@ class Node(BaseModel):
         return v
 
     @property
-    def antenna_altitude_m(self) -> Optional[float]:
-        """Altitudine assoluta dell'antenna (quota DEM + altezza antenna dal suolo)."""
-        if self.position is None:
-            return None
-        alt = self.position.lat  # placeholder, sarà integrata con DEM
-        h = self.ground_height_m or 3.0  # default 3m se non specificato
-        return h  # verrà sommato all'elevazione DEM in fase di calcolo
-
-    @property
     def is_complete(self) -> bool:
         """
         True se il nodo ha tutti i dati necessari per il calcolo di copertura.
@@ -257,7 +266,6 @@ class Node(BaseModel):
         for field_name in self.model_fields:
             other_val = getattr(other, field_name, None)
             if other_val is not None:
-                # Confronto timestamp per last_seen
                 if field_name == "last_seen":
                     if self.last_seen is None or (other_val > self.last_seen):
                         object.__setattr__(self, field_name, other_val)

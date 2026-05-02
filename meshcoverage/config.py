@@ -44,9 +44,20 @@ class Settings(BaseSettings):
 
     # DEM — bare-earth terrain model (required)
     dem_dir: Path = Field(default=Path("./data/dem"))
-    dem_resolution: int = Field(default=30)   # metres
 
-    # DSM — surface model with buildings and vegetation (optional, Change F)
+    # DEM resolution for viewshed grid (metres).
+    # Affects both accuracy and computation time. The viewshed engine uses
+    # an adaptive strategy: this value is used as the base resolution for
+    # nearby terrain; the coverage_calculator may raise it for long-range
+    # nodes to keep grid point counts manageable.
+    #
+    # Recommended values:
+    #   30m  — very detailed, feasible only for short-range nodes (< 20km)
+    #   100m — good balance of detail and speed (default)
+    #   200m — fast, suitable for long-range / high-density meshes
+    dem_resolution: int = Field(default=100)   # metres
+
+    # DSM — surface model with buildings and vegetation (optional)
     #
     # When set, obstacle heights along the signal path are read from the DSM
     # (which includes buildings, trees, etc.) instead of the bare-earth DTM.
@@ -74,7 +85,17 @@ class Settings(BaseSettings):
 
     # Coverage calculation
     max_workers: int = Field(default=0)
-    max_range_km: float = Field(default=50.0)
+
+    # Maximum analysis radius per node (km).
+    # LoRa in flat terrain can reach 100–500+ km in free space.
+    # The coverage_calculator automatically limits this to the distance
+    # where the link budget hits 0 dB, so raising this cap is safe — it
+    # only affects nodes that actually have the link budget to reach further.
+    #
+    # 150 km covers the vast majority of real-world deployments.
+    # Increase to 300 km for hilltop ROUTER nodes with high-gain antennas.
+    max_range_km: float = Field(default=150.0)
+
     receiver_height_m: float = Field(default=1.5)
     receiver_gain_dbi: float = Field(default=2.15)
     min_link_budget_db: float = Field(default=0.0)

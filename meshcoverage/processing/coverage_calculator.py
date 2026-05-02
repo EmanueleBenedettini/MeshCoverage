@@ -28,6 +28,35 @@ from meshcoverage.processing.node_links import compute_node_links
 
 log = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Adaptive resolution: coarser grid for longer ranges to keep point counts
+# manageable without sacrificing near-field detail.
+#
+# Target: ~1–4 million grid points per node.
+# At resolution R (m) and range D (km):
+#   n_steps = D*1000/R
+#   points  = (2*n_steps+1)^2 ≈ (2*D*1000/R)^2
+#
+# R=100m, D= 50km → 1.0 M points  ✓
+# R=100m, D=100km → 4.0 M points  ✓
+# R=100m, D=150km → 9.0 M points  (heavy)
+# R=200m, D=150km → 2.3 M points  ✓
+# ---------------------------------------------------------------------------
+
+def _adaptive_resolution(max_range_km: float, base_resolution_m: int) -> int:
+    """
+    Return a grid resolution (m) appropriate for the given analysis range.
+    Never goes below base_resolution_m (the DEM's native detail level).
+    """
+    if max_range_km <= 20:
+        return base_resolution_m          # e.g. 100m
+    elif max_range_km <= 50:
+        return max(base_resolution_m, 100)
+    elif max_range_km <= 100:
+        return max(base_resolution_m, 150)
+    else:
+        return max(base_resolution_m, 200)
+
 
 class CoverageCalculator:
     """Calcola la copertura radio per i nodi Meshtastic."""
@@ -104,12 +133,19 @@ class CoverageCalculator:
                 f"di +{settings.erp_warning_dbm}dBm!"
             )
 
-        max_range = max_range_km(
+        # Compute true max range from link budget (corrected Friis formula),
+        # then cap at the configured absolute limit.
+        # This ensures nodes with long-range presets get an appropriately
+        # large analysis area without wasting compute on nodes with short range.
+        node_max_range = max_range_km(
             node.frequency_mhz, node.modem_preset,
             ant.tx_power_dbm, ant.gain_dbi
         )
-        max_range_actual = min(max_range, settings.max_range_km)
-        log.info(f"Distanza massima teorica: {max_range:.1f}km → uso {max_range_actual:.1f}km")
+        max_range_actual = min(node_max_range, settings.max_range_km)
+        log.info(
+            f"Distanza massima: link-budget={node_max_range:.1f}km "
+            f"cap={settings.max_range_km}km → uso {max_range_actual:.1f}km"
+        )
 
         ant_elev = self.dem.get_elevation(node.position.lat, node.position.lon)
         if ant_elev is None:
@@ -121,6 +157,14 @@ class CoverageCalculator:
 
         gain_min = ant.gain_min_dbi if ant.gain_min_dbi is not None else ant.gain_dbi - 3
         gain_max = ant.gain_max_dbi if ant.gain_max_dbi is not None else ant.gain_dbi
+
+        # Adaptive resolution — coarser grid for long-range nodes
+        resolution = _adaptive_resolution(max_range_actual, settings.dem_resolution)
+        if resolution != settings.dem_resolution:
+            log.info(
+                f"Risoluzione adattiva: {settings.dem_resolution}m → {resolution}m "
+                f"per range={max_range_actual:.0f}km"
+            )
 
         params = ViewshedParams(
             node_id=node.id,
@@ -139,7 +183,7 @@ class CoverageCalculator:
             rx_gain_dbi=settings.receiver_gain_dbi,
             max_range_m=max_range_actual * 1000,
             dem_dir=settings.dem_dir,
-            resolution_m=settings.dem_resolution,
+            resolution_m=resolution,
             rx_height_m=settings.receiver_height_m,
         )
 
@@ -152,7 +196,6 @@ class CoverageCalculator:
         def _internal_progress_cb(done: int, total: int):
             pct = int(100 * done / total) if total > 0 else 0
             self._status[node.id]["progress"] = pct
-            # Forward to external caller (e.g. API route → WebSocket)
             if progress_callback is not None:
                 try:
                     progress_callback(node.id, done, total)
@@ -168,6 +211,7 @@ class CoverageCalculator:
         settings.coverage_dir.mkdir(parents=True, exist_ok=True)
         coverage_path = self._get_coverage_path(node.id)
 
+        covered = [r for r in results if r.get("los", False)]
         metadata = {
             "node_id": node.id,
             "computed_at": datetime.now(timezone.utc).isoformat(),
@@ -178,9 +222,11 @@ class CoverageCalculator:
             "max_range_km": max_range_actual,
             "sensitivity_dbm": MODEM_PRESETS[node.modem_preset]["receiver_sensitivity_dbm"],
             "ant_alt_m": round(ant_alt_m, 2),
-            "point_count": len(results),
+            "resolution_m": resolution,
+            "point_count": len(covered),
+            "shadow_point_count": len([r for r in results if r.get("shadow", False)]),
             "covered_points": len([
-                r for r in results
+                r for r in covered
                 if r.get("link_budget_db", float("-inf")) >= settings.min_link_budget_db
             ]),
             "duration_s": round(time.time() - start_time, 1),
@@ -197,7 +243,9 @@ class CoverageCalculator:
 
         log.info(
             f"✓ Nodo {node.id}: {metadata['point_count']} punti "
-            f"({metadata['covered_points']} coperti) in {metadata['duration_s']}s"
+            f"({metadata['covered_points']} coperti, "
+            f"{metadata['shadow_point_count']} shadow) "
+            f"in {metadata['duration_s']}s"
         )
         return {"node_id": node.id, "status": "done", "metadata": metadata}
 
@@ -206,13 +254,7 @@ class CoverageCalculator:
         force: bool = False,
         node_progress_callback: Optional[Callable[[str, int, int], None]] = None,
     ) -> dict:
-        """
-        Calcola la copertura per tutti i nodi completi.
-
-        Args:
-            force: forza ricalcolo anche se già presente
-            node_progress_callback: callable(node_id, done, total) per aggiornamenti WS
-        """
+        """Calcola la copertura per tutti i nodi completi."""
         settings.ensure_dirs()
         nodes = database.get_complete_nodes()
 
