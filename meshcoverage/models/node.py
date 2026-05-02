@@ -196,6 +196,7 @@ class Node(BaseModel):
     modem_preset: Optional[str] = Field(default=None, description="Preset modem Meshtastic")
     antenna: Optional[AntennaParams] = Field(default=None)
     last_seen: Optional[datetime] = None
+    auto_update: bool = Field(default=True, description="Se True, i dati di questo nodo possono essere aggiornati automaticamente")
     notes: Optional[str] = None
 
     @validator("id")

@@ -87,6 +87,7 @@ function fillForm(form, node) {
   set('ground_height_m', node.ground_height_m);
   set('frequency_mhz', node.frequency_mhz);
   set('modem_preset', node.modem_preset);
+  set('auto_update', node.auto_update);
   set('notes', node.notes);
   if (node.antenna) {
     set('tx_power_dbm', node.antenna.tx_power_dbm);
@@ -123,6 +124,7 @@ async function saveNode() {
     frequency_mhz: gi('frequency_mhz'),
     modem_preset: g('modem_preset'),
     ground_height_m: gf('ground_height_m'),
+    auto_update: g('auto_update'),
     notes: g('notes'),
   };
 
@@ -179,3 +181,20 @@ async function deleteNode(nodeId) {
     showToast('Errore: ' + e.message, 'error');
   }
 }
+
+const NodeSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    role: { type: 'string' },
+    short_name: { type: 'string' },
+    long_name: { type: 'string' },
+    position: { type: 'object', properties: { lat: { type: 'number' }, lon: { type: 'number' } } },
+    ground_height_m: { type: 'number' },
+    frequency_mhz: { type: 'number' },
+    modem_preset: { type: 'string' },
+    auto_update: { type: 'boolean' },
+    notes: { type: 'string' },
+    antenna: { type: 'object', properties: { tx_power_dbm: { type: 'number' }, type: { type: 'string' }, gain_dbi: { type: 'number' }, azimuth_deg: { type: 'number' }, beamwidth_deg: { type: 'number' }, gain_min_dbi: { type: 'number' }, gain_max_dbi: { type: 'number' } } },
+  },
+};

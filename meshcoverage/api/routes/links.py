@@ -3,8 +3,8 @@ API for direct connections between nodes (inter-node links).
 
 Endpoints:
   GET  /api/links                      — list connections by freq+preset
-  GET  /api/links/{freq}/{preset}      — GeoJSON connections
   GET  /api/links/node/{node_id}       — connections of a specific node
+  GET  /api/links/{freq}/{preset}      — GeoJSON connections
   POST /api/links/compute              — recalculate connections
 """
 from __future__ import annotations
@@ -61,6 +61,48 @@ async def list_link_files():
     return available
 
 
+# ---------------------------------------------------------------------------
+# IMPORTANT: /node/{node_id} MUST be registered before /{freq}/{preset}.
+# FastAPI matches routes in declaration order. If /{freq}/{preset} comes first,
+# a request to /node/!7f13456e matches it with freq="node" (not an int) and
+# returns 422 Unprocessable Entity before the correct route is ever tried.
+# ---------------------------------------------------------------------------
+
+@router.get("/node/{node_id}")
+async def get_node_links(
+    node_id: str,
+    min_budget: float = Query(default=None),
+):
+    """
+    Returns all connections of a specific node,
+    aggregated from all available links files.
+    """
+    from meshcoverage import database as db
+    node = db.get_node(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail=f"Node {node_id!r} not found")
+
+    all_links = []
+    for f in settings.links_dir.glob("links_*.json"):
+        try:
+            with open(f) as jf:
+                data = json.load(jf)
+            for link in data.get("links", []):
+                nid = node_id.lower()
+                if link["node_a_id"] == nid or link["node_b_id"] == nid:
+                    link["frequency_mhz"] = data.get("frequency_mhz")
+                    link["modem_preset"] = data.get("modem_preset")
+                    all_links.append(link)
+        except Exception:
+            pass
+
+    if min_budget is not None:
+        all_links = [l for l in all_links if l.get("min_link_budget", float("-inf")) >= min_budget]
+
+    all_links.sort(key=lambda l: l.get("min_link_budget", float("-inf")), reverse=True)
+    return {"node_id": node_id, "links": all_links, "count": len(all_links)}
+
+
 @router.get("/{freq}/{preset}")
 async def get_links(
     freq: int,
@@ -74,7 +116,7 @@ async def get_links(
 ):
     """
     Returns direct connections between nodes by frequency and preset.
-    
+
     In GeoJSON format: each connection is a LineString with properties
     link_budget, distance and node IDs.
     """
@@ -146,41 +188,6 @@ async def get_links(
             "generated_at": data.get("generated_at"),
         },
     }
-
-
-@router.get("/node/{node_id}")
-async def get_node_links(
-    node_id: str,
-    min_budget: float = Query(default=None),
-):
-    """
-    Returns all connections of a specific node,
-    aggregated from all available links files.
-    """
-    from meshcoverage import database as db
-    node = db.get_node(node_id)
-    if not node:
-        raise HTTPException(status_code=404, detail=f"Node {node_id!r} not found")
-
-    all_links = []
-    for f in settings.links_dir.glob("links_*.json"):
-        try:
-            with open(f) as jf:
-                data = json.load(jf)
-            for link in data.get("links", []):
-                nid = node_id.lower()
-                if link["node_a_id"] == nid or link["node_b_id"] == nid:
-                    link["frequency_mhz"] = data.get("frequency_mhz")
-                    link["modem_preset"] = data.get("modem_preset")
-                    all_links.append(link)
-        except Exception:
-            pass
-
-    if min_budget is not None:
-        all_links = [l for l in all_links if l.get("min_link_budget", float("-inf")) >= min_budget]
-
-    all_links.sort(key=lambda l: l.get("min_link_budget", float("-inf")), reverse=True)
-    return {"node_id": node_id, "links": all_links, "count": len(all_links)}
 
 
 @router.post("/compute")
