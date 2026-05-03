@@ -1,6 +1,18 @@
 """
 Orchestratore principale del calcolo di copertura.
 Eseguito periodicamente (schedulato) o manualmente.
+
+La risoluzione della griglia non è più un valore fisso adattato a priori in
+base alla distanza: è ora la risoluzione *minima* (più fine) che il motore
+quad-tree può usare.  La densità effettiva dei punti campionati dipende dalla
+variabilità locale del terreno (roughness σ calcolata da DTM + DSM), quindi:
+
+  - Terreno pianeggiante / acqua  →  pochi punti grossolani (veloce)
+  - Montagne / creste / urbano   →  punti fitti a min_resolution_m (accurato)
+
+Il parametro ``dem_resolution`` nel file ``.env`` / ``settings`` è ora il
+floor della griglia (risoluzione massima di dettaglio).  Non viene più
+sovrascritto da nessuna logica adattiva basata sulla distanza.
 """
 from __future__ import annotations
 import json
@@ -27,35 +39,6 @@ from meshcoverage.processing.heatmap_generator import generate_heatmaps
 from meshcoverage.processing.node_links import compute_node_links
 
 log = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Adaptive resolution: coarser grid for longer ranges to keep point counts
-# manageable without sacrificing near-field detail.
-#
-# Target: ~1–4 million grid points per node.
-# At resolution R (m) and range D (km):
-#   n_steps = D*1000/R
-#   points  = (2*n_steps+1)^2 ≈ (2*D*1000/R)^2
-#
-# R=100m, D= 50km → 1.0 M points  ✓
-# R=100m, D=100km → 4.0 M points  ✓
-# R=100m, D=150km → 9.0 M points  (heavy)
-# R=200m, D=150km → 2.3 M points  ✓
-# ---------------------------------------------------------------------------
-
-def _adaptive_resolution(max_range_km: float, base_resolution_m: int) -> int:
-    """
-    Return a grid resolution (m) appropriate for the given analysis range.
-    Never goes below base_resolution_m (the DEM's native detail level).
-    """
-    if max_range_km <= 20:
-        return base_resolution_m          # e.g. 100m
-    elif max_range_km <= 50:
-        return max(base_resolution_m, 100)
-    elif max_range_km <= 100:
-        return max(base_resolution_m, 150)
-    else:
-        return max(base_resolution_m, 200)
 
 
 class CoverageCalculator:
@@ -105,66 +88,77 @@ class CoverageCalculator:
         progress_callback: Optional[Callable[[str, int, int], None]] = None,
     ) -> dict:
         """
-        Calcola la copertura per un singolo nodo.
+        Calcola la copertura per un singolo nodo con griglia adattiva quad-tree.
+
+        La risoluzione della griglia è adattata automaticamente alla complessità
+        del terreno: ``settings.dem_resolution`` è il limite inferiore (massimo
+        dettaglio) — zone pianeggianti vengono campionate più raramente per
+        efficienza, zone montuose al massimo dettaglio disponibile.
 
         Args:
-            node: nodo da calcolare
-            force: forza ricalcolo anche se già presente
-            progress_callback: callable(node_id, done, total) chiamato ogni 100 punti
+            node:              Nodo da calcolare
+            force:             Forza ricalcolo anche se già aggiornato
+            progress_callback: callable(node_id, done, total) — aggiornamento progresso
         Returns:
-            dizionario con risultati e metadati
+            Dict con risultati e metadati del calcolo
         """
         if not node.is_complete:
-            log.warning(f"Nodo {node.id} non completo, skip")
+            log.warning("Nodo %s non completo, skip", node.id)
             return {"node_id": node.id, "status": "incomplete"}
 
         if not force and not self._needs_recompute(node):
-            log.info(f"Nodo {node.id} aggiornato, skip (usa --force per forzare)")
+            log.info(
+                "Nodo %s già aggiornato, skip (usa --force per forzare)", node.id
+            )
             return {"node_id": node.id, "status": "cached"}
 
-        log.info(f"=== Calcolo copertura nodo {node.id} ({node.short_name}) ===")
+        log.info(
+            "=== Calcolo copertura nodo %s (%s) ===",
+            node.id, node.short_name or "—",
+        )
         start_time = time.time()
 
         ant = node.antenna
         erp, erp_warning = check_erp_warning(ant.tx_power_dbm, ant.gain_dbi)
         if erp_warning:
             log.warning(
-                f"⚠ ATTENZIONE: Nodo {node.id} — ERP={erp:.1f}dBm supera il limite "
-                f"di +{settings.erp_warning_dbm}dBm!"
+                "⚠ ATTENZIONE: Nodo %s — ERP=%.1f dBm supera il limite di +%.0f dBm!",
+                node.id, erp, settings.erp_warning_dbm,
             )
 
-        # Compute true max range from link budget (corrected Friis formula),
-        # then cap at the configured absolute limit.
-        # This ensures nodes with long-range presets get an appropriately
-        # large analysis area without wasting compute on nodes with short range.
+        # Maximum analysis range: link-budget distance capped at the configured limit.
+        # The quad-tree grid does NOT use a pre-computed resolution — it adapts to
+        # terrain roughness.  The only resolution value passed is the minimum (finest)
+        # cell size, which comes directly from the user configuration.
         node_max_range = max_range_km(
             node.frequency_mhz, node.modem_preset,
             ant.tx_power_dbm, ant.gain_dbi
         )
         max_range_actual = min(node_max_range, settings.max_range_km)
         log.info(
-            f"Distanza massima: link-budget={node_max_range:.1f}km "
-            f"cap={settings.max_range_km}km → uso {max_range_actual:.1f}km"
+            "Distanza massima: link-budget=%.1f km  cap=%.0f km  → %.1f km",
+            node_max_range, settings.max_range_km, max_range_actual,
         )
 
         ant_elev = self.dem.get_elevation(node.position.lat, node.position.lon)
         if ant_elev is None:
-            log.error(f"Nessun dato DEM per nodo {node.id}")
+            log.error("Nessun dato DEM per nodo %s", node.id)
             return {"node_id": node.id, "status": "no_dem"}
 
         ant_alt_m = ant_elev + (node.ground_height_m or 3.0)
-        log.info(f"Altitudine antenna: {ant_alt_m:.1f}m slm")
+        log.info("Altitudine antenna: %.1f m slm", ant_alt_m)
 
         gain_min = ant.gain_min_dbi if ant.gain_min_dbi is not None else ant.gain_dbi - 3
         gain_max = ant.gain_max_dbi if ant.gain_max_dbi is not None else ant.gain_dbi
 
-        # Adaptive resolution — coarser grid for long-range nodes
-        resolution = _adaptive_resolution(max_range_actual, settings.dem_resolution)
-        if resolution != settings.dem_resolution:
-            log.info(
-                f"Risoluzione adattiva: {settings.dem_resolution}m → {resolution}m "
-                f"per range={max_range_actual:.0f}km"
-            )
+        # ``resolution_m`` is the quad-tree cell floor — the finest sampling step.
+        # The engine will use coarser cells in flat terrain automatically.
+        min_resolution_m = settings.dem_resolution
+        log.info(
+            "Griglia quad-tree adattiva: min_resolution=%d m  "
+            "(celle più grossolane in terreno pianeggiante)",
+            min_resolution_m,
+        )
 
         params = ViewshedParams(
             node_id=node.id,
@@ -183,7 +177,7 @@ class CoverageCalculator:
             rx_gain_dbi=settings.receiver_gain_dbi,
             max_range_m=max_range_actual * 1000,
             dem_dir=settings.dem_dir,
-            resolution_m=resolution,
+            resolution_m=min_resolution_m,
             rx_height_m=settings.receiver_height_m,
         )
 
@@ -212,6 +206,8 @@ class CoverageCalculator:
         coverage_path = self._get_coverage_path(node.id)
 
         covered = [r for r in results if r.get("los", False)]
+        shadows  = [r for r in results if r.get("shadow", False)]
+
         metadata = {
             "node_id": node.id,
             "computed_at": datetime.now(timezone.utc).isoformat(),
@@ -222,9 +218,11 @@ class CoverageCalculator:
             "max_range_km": max_range_actual,
             "sensitivity_dbm": MODEM_PRESETS[node.modem_preset]["receiver_sensitivity_dbm"],
             "ant_alt_m": round(ant_alt_m, 2),
-            "resolution_m": resolution,
+            # Grid metadata — now reflects quad-tree, not a single fixed resolution
+            "resolution_mode": "quadtree",
+            "min_resolution_m": min_resolution_m,
             "point_count": len(covered),
-            "shadow_point_count": len([r for r in results if r.get("shadow", False)]),
+            "shadow_point_count": len(shadows),
             "covered_points": len([
                 r for r in covered
                 if r.get("link_budget_db", float("-inf")) >= settings.min_link_budget_db
@@ -242,10 +240,14 @@ class CoverageCalculator:
         }
 
         log.info(
-            f"✓ Nodo {node.id}: {metadata['point_count']} punti "
-            f"({metadata['covered_points']} coperti, "
-            f"{metadata['shadow_point_count']} shadow) "
-            f"in {metadata['duration_s']}s"
+            "✓ Nodo %s: %d punti coperti  %d shadow  %d totali  "
+            "in %.1f s  (min_res=%d m, quad-tree adattivo)",
+            node.id,
+            metadata["point_count"],
+            metadata["shadow_point_count"],
+            len(results),
+            metadata["duration_s"],
+            min_resolution_m,
         )
         return {"node_id": node.id, "status": "done", "metadata": metadata}
 
@@ -262,7 +264,11 @@ class CoverageCalculator:
             log.warning("Nessun nodo completo trovato nel database")
             return {"status": "no_nodes", "computed": 0}
 
-        log.info(f"=== Avvio calcolo copertura per {len(nodes)} nodi ===")
+        log.info(
+            "=== Avvio calcolo copertura per %d nodi "
+            "(griglia quad-tree adattiva, min_res=%d m) ===",
+            len(nodes), settings.dem_resolution,
+        )
         results = []
 
         for node in nodes:
@@ -272,24 +278,35 @@ class CoverageCalculator:
                 )
                 results.append(result)
             except Exception as e:
-                log.error(f"Errore calcolo nodo {node.id}: {e}", exc_info=True)
-                results.append({"node_id": node.id, "status": "error", "error": str(e)})
+                log.error(
+                    "Errore calcolo nodo %s: %s", node.id, e, exc_info=True
+                )
+                results.append(
+                    {"node_id": node.id, "status": "error", "error": str(e)}
+                )
 
         log.info("=== Generazione heatmap aggregate ===")
         try:
             generate_heatmaps()
         except Exception as e:
-            log.error(f"Errore generazione heatmap: {e}", exc_info=True)
+            log.error("Errore generazione heatmap: %s", e, exc_info=True)
 
         log.info("=== Calcolo connessioni inter-nodo ===")
         try:
             compute_node_links()
         except Exception as e:
-            log.error(f"Errore calcolo connessioni: {e}", exc_info=True)
+            log.error("Errore calcolo connessioni: %s", e, exc_info=True)
 
         done = len([r for r in results if r.get("status") == "done"])
-        log.info(f"=== Calcolo completato: {done}/{len(nodes)} nodi ===")
-        return {"status": "done", "total": len(nodes), "computed": done, "results": results}
+        log.info(
+            "=== Calcolo completato: %d/%d nodi ===", done, len(nodes)
+        )
+        return {
+            "status": "done",
+            "total": len(nodes),
+            "computed": done,
+            "results": results,
+        }
 
     def get_status(self, node_id: str = None) -> dict:
         if node_id:
@@ -320,7 +337,9 @@ def main(all_nodes, node_id, force, no_heatmap, no_links):
     if node_id:
         node = database.get_node(node_id)
         if not node:
-            click.echo(f"Errore: nodo {node_id!r} non trovato nel database", err=True)
+            click.echo(
+                f"Errore: nodo {node_id!r} non trovato nel database", err=True
+            )
             sys.exit(1)
         result = calc.compute_node(node, force=force)
         click.echo(json.dumps(result, indent=2, default=str))
@@ -333,7 +352,7 @@ def main(all_nodes, node_id, force, no_heatmap, no_links):
         result = calc.compute_all(force=force)
         click.echo(json.dumps(
             {k: v for k, v in result.items() if k != "results"},
-            indent=2, default=str
+            indent=2, default=str,
         ))
 
     else:
