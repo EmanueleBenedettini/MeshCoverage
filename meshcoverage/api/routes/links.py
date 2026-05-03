@@ -6,6 +6,13 @@ Endpoints:
   GET  /api/links/node/{node_id}       — connections of a specific node
   GET  /api/links/{freq}/{preset}      — GeoJSON connections
   POST /api/links/compute              — recalculate connections
+
+NOTE ON NAMING:
+  The JSON files produced by node_links.py use 'link_margin_*' (not
+  'link_budget_*').  Link margin = received power − sensitivity threshold.
+  A positive margin means the link is viable; higher is better.
+  Colour thresholds used in the frontend: green ≥ 20 dB, amber ≥ 10 dB,
+  red < 10 dB.
 """
 from __future__ import annotations
 import json
@@ -71,7 +78,7 @@ async def list_link_files():
 @router.get("/node/{node_id}")
 async def get_node_links(
     node_id: str,
-    min_budget: float = Query(default=None),
+    min_margin: float = Query(default=None, description="Filter by minimum link margin (dB)"),
 ):
     """
     Returns all connections of a specific node,
@@ -96,10 +103,10 @@ async def get_node_links(
         except Exception:
             pass
 
-    if min_budget is not None:
-        all_links = [l for l in all_links if l.get("min_link_budget", float("-inf")) >= min_budget]
+    if min_margin is not None:
+        all_links = [l for l in all_links if l.get("min_link_margin", float("-inf")) >= min_margin]
 
-    all_links.sort(key=lambda l: l.get("min_link_budget", float("-inf")), reverse=True)
+    all_links.sort(key=lambda l: l.get("min_link_margin", float("-inf")), reverse=True)
     return {"node_id": node_id, "links": all_links, "count": len(all_links)}
 
 
@@ -111,14 +118,14 @@ async def get_links(
         default=True,
         description="Returns as GeoJSON LineString (true) or raw JSON (false)"
     ),
-    min_budget: float = Query(default=None, description="Filter by minimum link budget (dB)"),
+    min_margin: float = Query(default=None, description="Filter by minimum link margin (dB)"),
     node_id: Optional[str] = Query(default=None, description="Filter by specific node"),
 ):
     """
     Returns direct connections between nodes by frequency and preset.
 
-    In GeoJSON format: each connection is a LineString with properties
-    link_budget, distance and node IDs.
+    In GeoJSON format: each connection is a LineString whose properties
+    include link_margin (dB above sensitivity), distance, and node IDs.
     """
     path = _links_path(freq, preset)
     if not path.exists():
@@ -133,8 +140,8 @@ async def get_links(
     links = data.get("links", [])
 
     # Filters
-    if min_budget is not None:
-        links = [l for l in links if l.get("min_link_budget", float("-inf")) >= min_budget]
+    if min_margin is not None:
+        links = [l for l in links if l.get("min_link_margin", float("-inf")) >= min_margin]
     if node_id:
         nid = node_id.lower()
         links = [l for l in links if l["node_a_id"] == nid or l["node_b_id"] == nid]
@@ -170,9 +177,10 @@ async def get_links(
                 "node_a_name": node_a.short_name or link["node_a_id"],
                 "node_b_name": node_b.short_name or link["node_b_id"],
                 "distance_km": link.get("distance_km"),
-                "min_link_budget": link.get("min_link_budget"),
-                "link_budget_a_to_b": link.get("link_budget_a_to_b"),
-                "link_budget_b_to_a": link.get("link_budget_b_to_a"),
+                # link_margin_* = margin above receiver sensitivity (dB)
+                "min_link_margin": link.get("min_link_margin"),
+                "link_margin_a_to_b": link.get("link_margin_a_to_b"),
+                "link_margin_b_to_a": link.get("link_margin_b_to_a"),
                 "los": link.get("los"),
                 "fresnel_ok": link.get("fresnel_ok"),
             },

@@ -1,18 +1,24 @@
 /**
- * MeshMonitor — Logica mappa principale (Leaflet.js)
+ * MeshMonitor — Main map logic (Leaflet.js)
  *
- * Gestisce:
- * - Layer heatmap (leaflet.heat)
- * - Layer shadow zone (canvas overlay — hatched dark polygons)
- * - Layer connessioni inter-nodo (LineString)
- * - Layer marker nodi
- * - Sidebar con dettaglio nodo e diagramma di radiazione
- * - Calcolo e refresh dati
+ * Handles:
+ * - Heatmap layer (canvas pixel overlay)
+ * - Shadow zone layer (canvas overlay — dark hatched areas)
+ * - Inter-node connection layer (LineString)
+ * - Node marker layer
+ * - Sidebar with node detail and radiation diagram
+ * - Data calculation and refresh
+ *
+ * NAMING NOTE:
+ *   Link margin = received power − receiver sensitivity threshold (dB).
+ *   A positive value means the link is viable; higher is better.
+ *   Colour bands: green ≥ 20 dB | amber ≥ 10 dB | red < 10 dB
+ *   This was previously (and incorrectly) labelled "link budget" in the UI.
  */
 
 'use strict';
 
-// ── Stato globale ──────────────────────────────────────────────────────────
+// ── Global state ──────────────────────────────────────────────────────────
 let map, heatLayer, shadowLayer, linksLayer, nodesLayer;
 let allNodes = {};
 let selectedNodeId = null;
@@ -27,11 +33,11 @@ const state = {
   showNodes: true,
 };
 
-// ── PixelCoverageLayer — canvas raster a pixel ─────────────────────────────
+// ── PixelCoverageLayer — solid-pixel canvas raster ─────────────────────────
 //
-// Sostituisce leaflet.heat con un layer canvas che disegna rettangoli solidi
-// per ogni cella della griglia. Nessuna sfocatura, nessun punto distinto
-// al zoom alto: si vedono quadrati colorati che coprono la cella di griglia.
+// Replaces leaflet.heat with a canvas layer that draws solid rectangles
+// for each grid cell. No blur, no isolated dots at high zoom: coloured
+// squares that fill the grid cell are shown instead.
 
 const PixelCoverageLayer = L.Layer.extend({
 
@@ -39,7 +45,7 @@ const PixelCoverageLayer = L.Layer.extend({
     // points: [{lat, lon, lb}]
     this._points = points || [];
     L.setOptions(this, L.extend({
-      gridDeg: 0.001,   // risoluzione griglia in gradi (~100 m a lat media EU)
+      gridDeg: 0.001,   // grid resolution in degrees (~100 m at mid-EU latitude)
       opacity: 0.75,
     }, options));
   },
@@ -47,21 +53,19 @@ const PixelCoverageLayer = L.Layer.extend({
   onAdd: function (map) {
     this._map = map;
     this._canvas = L.DomUtil.create('canvas', 'leaflet-layer');
-    // 'leaflet-layer' already sets position:absolute; left:0; top:0 via Leaflet CSS.
-    // pointer-events:none prevents the canvas from swallowing map clicks.
+    // pointer-events:none prevents the canvas from swallowing map clicks
     this._canvas.style.pointerEvents = 'none';
     map.getPanes().overlayPane.appendChild(this._canvas);
 
-    // viewreset fires when Leaflet resets the internal pixel-origin to prevent
-    // floating-point drift at large pan offsets — must redraw when it fires.
+    // viewreset fires when Leaflet resets the pixel-origin to prevent
+    // floating-point drift — must redraw on that event too
     map.on('viewreset moveend zoomend resize', this._reset, this);
 
     // NOTE: we do NOT listen to 'move' (pan animation frames).
-    // Repositioning the canvas every frame while leaving stale content causes
-    // the coverage layer to appear frozen on the screen while the tiles scroll
-    // underneath it.  Leaflet moves the entire overlayPane during pan, so the
-    // canvas drifts with the tiles (good enough visually); on 'moveend' we
-    // reposition and redraw cleanly.
+    // Repositioning every frame while leaving stale content causes the
+    // coverage layer to appear frozen while tiles scroll underneath.
+    // Leaflet moves the whole overlayPane during pan (good enough visually);
+    // on 'moveend' we reposition and redraw cleanly.
 
     this._reset();
     return this;
@@ -83,9 +87,9 @@ const PixelCoverageLayer = L.Layer.extend({
     this._canvas.width  = size.x;
     this._canvas.height = size.y;
 
-    // Align the canvas top-left corner to the map container's top-left corner.
-    // containerPointToLayerPoint([0,0]) returns the offset needed to counteract
-    // the overlayPane's own CSS transform, keeping the canvas at container (0,0).
+    // Align canvas top-left to the map container's top-left corner.
+    // containerPointToLayerPoint([0,0]) returns the offset needed to
+    // counteract the overlayPane's own CSS transform.
     var topLeft = this._map.containerPointToLayerPoint([0, 0]);
     L.DomUtil.setPosition(this._canvas, topLeft);
 
@@ -99,27 +103,26 @@ const PixelCoverageLayer = L.Layer.extend({
     var canvas = this._canvas;
     var ctx    = canvas.getContext('2d');
 
-    // Use canvas own dimensions, not a second call to map.getSize()
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Calcola quanti pixel occupa una cella di griglia al livello di zoom corrente.
-    // Usiamo il centro della mappa come punto di riferimento per una stima accurata.
+    // Calculate how many pixels one grid cell occupies at the current zoom.
+    // We use the map centre as a reference for an accurate estimate.
     var GRID   = this.options.gridDeg;
     var center = map.getCenter();
     var p0 = map.latLngToContainerPoint(L.latLng(center.lat,        center.lng));
     var p1 = map.latLngToContainerPoint(L.latLng(center.lat + GRID, center.lng + GRID));
-    // +1 per evitare gap tra celle adiacenti; minimo 2px per visibilità
+    // +1 to avoid gaps between adjacent cells; minimum 2 px for visibility
     var cellW = Math.max(2, Math.ceil(Math.abs(p1.x - p0.x)) + 1);
     var cellH = Math.max(2, Math.ceil(Math.abs(p1.y - p0.y)) + 1);
 
-    // Aggiungi un margine per non perdere punti parzialmente visibili al bordo
+    // Small padding so points partially visible at the edge are not clipped
     var bounds = map.getBounds().pad(0.05);
 
     var pts = this._points;
     for (var i = 0, len = pts.length; i < len; i++) {
       var pt = pts[i];
 
-      // Filtra velocemente i punti fuori dalla vista
+      // Fast viewport cull
       if (pt.lat < bounds.getSouth() || pt.lat > bounds.getNorth() ||
           pt.lon < bounds.getWest()  || pt.lon > bounds.getEast()) continue;
 
@@ -135,22 +138,22 @@ const PixelCoverageLayer = L.Layer.extend({
   },
 });
 
-// ── Gradiente colore link budget ───────────────────────────────────────────
+// ── Link margin colour gradient ────────────────────────────────────────────
 //
-// Stessa rampa colore usata in precedenza da leaflet.heat, ma ora applicata
-// come colore solido di ciascun pixel (senza sfocatura).
+// The same colour ramp as before, applied as a solid pixel colour
+// (no blur), mapped to link margin (dB above sensitivity).
 //
-//  lb ≤ -10  →  blu scuro  #1e3a5f
-//  lb ≈  0   →  blu        #1d4ed8
-//  lb ≈  10  →  ambra      #f59e0b
-//  lb ≈  20  →  arancione  #f97316
-//  lb ≥  30  →  verde      #22c55e
+//  margin ≤ -10  →  dark blue  #1e3a5f
+//  margin ≈  0   →  blue       #1d4ed8
+//  margin ≈  10  →  amber      #f59e0b
+//  margin ≈  20  →  orange     #f97316
+//  margin ≥  30  →  green      #22c55e
 
 function lbToColor(lb, alpha) {
   var maxLB = 30;
   var t = Math.max(0, Math.min(1, (lb + 10) / (maxLB + 10)));
 
-  // [soglia_t, r, g, b]
+  // [threshold_t, r, g, b]
   var stops = [
     [0.00,  30,  58,  95],
     [0.30,  29,  78, 216],
@@ -172,7 +175,28 @@ function lbToColor(lb, alpha) {
   return 'rgba(' + r + ',' + g + ',' + b + ',' + (alpha || 0.72) + ')';
 }
 
-// ── Init mappa ─────────────────────────────────────────────────────────────
+// ── Link margin → line colour ──────────────────────────────────────────────
+//
+// Used for inter-node connection lines on the map.
+// Thresholds (dB above sensitivity):
+//   green  ≥ 20 dB  — strong, reliable link
+//   amber  ≥ 10 dB  — acceptable, some fade margin remaining
+//   red    < 10 dB  — marginal or weak link
+
+function marginToLineColor(margin_db) {
+  if (margin_db >= 20) return '#22c55e';   // green
+  if (margin_db >= 10) return '#f59e0b';   // amber
+  return '#ef4444';                         // red
+}
+
+// ── CSS class for link margin value labels ─────────────────────────────────
+function marginClass(margin_db) {
+  if (margin_db >= 20) return 'lb-good';
+  if (margin_db >= 10) return 'lb-medium';
+  return 'lb-poor';
+}
+
+// ── Map initialisation ─────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
   initMap();
@@ -211,8 +235,8 @@ function initControls() {
   const btnClose   = document.getElementById('btn-close-detail');
   const btnComputeNode = document.getElementById('btn-compute-node');
 
-  state.freq    = selFreq?.value   ? parseInt(selFreq.value)   : null;
-  state.preset  = selPreset?.value || null;
+  state.freq      = selFreq?.value   ? parseInt(selFreq.value)   : null;
+  state.preset    = selPreset?.value || null;
   state.minBudget = parseFloat(inpBudget?.value || '0');
 
   btnApply?.addEventListener('click', applyFilters);
@@ -244,28 +268,28 @@ function initControls() {
 function initWsHandlers() {
   meshWS
     .on('compute_started', () => {
-      setComputeProgress(0, 'Calcolo avviato...');
+      setComputeProgress(0, 'Calculation started...');
       showProgress(true);
     })
     .on('compute_progress', msg => {
       setComputeProgress(msg.pct || 0, `${msg.pct || 0}% — ${msg.node_id || ''}`);
     })
     .on('compute_done', () => {
-      setComputeProgress(100, 'Completato!');
+      setComputeProgress(100, 'Complete!');
       setTimeout(() => showProgress(false), 3000);
-      showToast('Calcolo completato', 'success');
+      showToast('Calculation complete', 'success');
       loadInitialData();
     })
     .on('compute_error', msg => {
       showProgress(false);
-      showToast(`Errore calcolo: ${msg.error}`, 'error');
+      showToast(`Calculation error: ${msg.error}`, 'error');
     })
     .on('node_updated', () => {
       loadNodes();
     });
 }
 
-// ── Caricamento dati ───────────────────────────────────────────────────────
+// ── Data loading ───────────────────────────────────────────────────────────
 
 async function loadInitialData() {
   await loadNodes();
@@ -280,13 +304,13 @@ async function loadNodes() {
     renderNodeMarkers();
     updateNodeCountBadge();
   } catch (e) {
-    showToast('Errore caricamento nodi: ' + e.message, 'error');
+    showToast('Error loading nodes: ' + e.message, 'error');
   }
 }
 
 function updateNodeCountBadge() {
   const badge = document.getElementById('node-count-badge');
-  if (badge) badge.textContent = `${Object.keys(allNodes).length} nodi`;
+  if (badge) badge.textContent = `${Object.keys(allNodes).length} nodes`;
 }
 
 async function applyFilters() {
@@ -331,7 +355,7 @@ async function loadHeatmap() {
     }
 
   } catch (e) {
-    console.debug('Heatmap non disponibile:', e.message);
+    console.debug('Heatmap not available:', e.message);
   }
 }
 
@@ -351,11 +375,9 @@ async function loadShadows() {
     const geojson = await apiGet(url);
     if (!geojson?.features?.length) return;
 
-    // Build a canvas-rendered layer via L.heatLayer-style approach but
-    // with a distinct purple/dark gradient to visually separate from coverage.
+    // All shadow points have equal intensity — they are binary (blocked or not).
     const points = geojson.features.map(f => {
       const [lon, lat] = f.geometry.coordinates;
-      // All shadow points have equal intensity — they are binary (blocked or not).
       return [lat, lon, 1.0];
     });
 
@@ -374,7 +396,7 @@ async function loadShadows() {
 
     if (state.showShadows) {
       shadowLayer.addTo(map);
-      // Ensure shadow layer is below heatmap layer visually
+      // Ensure shadow layer renders below heatmap layer
       if (heatLayer) {
         shadowLayer.setZIndex && shadowLayer.setZIndex(1);
       }
@@ -382,11 +404,11 @@ async function loadShadows() {
 
   } catch (e) {
     // Shadow data not yet computed — not a blocking error
-    console.debug('Shadow zones non disponibili:', e.message);
+    console.debug('Shadow zones not available:', e.message);
   }
 }
 
-// ── Links ──────────────────────────────────────────────────────────────────
+// ── Inter-node connection links ────────────────────────────────────────────
 
 async function loadLinks() {
   linksLayer.clearLayers();
@@ -397,34 +419,37 @@ async function loadLinks() {
     if (!geojson?.features?.length) return;
 
     geojson.features.forEach(f => {
-      const lb    = f.properties.min_link_budget || 0;
-      const color = lb >= 15 ? '#22c55e' : lb >= 5 ? '#f59e0b' : '#ef4444';
+      // min_link_margin: margin above receiver sensitivity (dB)
+      // positive = reachable; colour-coded by strength
+      const margin = f.properties.min_link_margin ?? 0;
+      const color  = marginToLineColor(margin);
 
       const line = L.geoJSON(f, {
         style: {
           color,
           weight: 2,
           opacity: 0.75,
+          // Dashed line when Fresnel zone is obstructed
           dashArray: f.properties.fresnel_ok ? null : '5,4',
         },
       });
 
       line.bindTooltip(`
         <b>${f.properties.node_a_name}</b> ↔ <b>${f.properties.node_b_name}</b><br>
-        Distanza: ${f.properties.distance_km} km<br>
-        Link budget: ${lb?.toFixed(1)} dB
-        ${f.properties.fresnel_ok ? '' : '<br><i>Fresnel ostruita</i>'}
+        Distance: ${f.properties.distance_km} km<br>
+        Link margin: ${margin?.toFixed(1)} dB
+        ${f.properties.fresnel_ok ? '' : '<br><i>Fresnel zone obstructed</i>'}
       `, { sticky: true });
 
       linksLayer.addLayer(line);
     });
 
   } catch (e) {
-    console.debug('Links non disponibili:', e.message);
+    console.debug('Links not available:', e.message);
   }
 }
 
-// ── Marker nodi ────────────────────────────────────────────────────────────
+// ── Node markers ───────────────────────────────────────────────────────────
 
 function renderNodeMarkers() {
   nodesLayer.clearLayers();
@@ -448,7 +473,7 @@ function renderNodeMarkers() {
         <small style="color:#94a3b8">${node.id}</small><br>
         ${node.frequency_mhz ? `${node.frequency_mhz} MHz` : '—'} /
         ${node.modem_preset || '—'}<br>
-        ${node.is_complete ? '✓ Completo' : '⚠ Incompleto'}
+        ${node.is_complete ? '✓ Complete' : '⚠ Incomplete'}
       </div>
     `);
 
@@ -457,7 +482,7 @@ function renderNodeMarkers() {
   });
 }
 
-// ── Selezione nodo ─────────────────────────────────────────────────────────
+// ── Node selection ─────────────────────────────────────────────────────────
 
 async function selectNode(nodeId) {
   selectedNodeId = nodeId;
@@ -478,21 +503,21 @@ async function showNodeDetail(nodeId) {
 
   const info = document.getElementById('nd-info');
   info.innerHTML =
-    infoItem('ID',            `<code>${node.id}</code>`) +
-    infoItem('Nome',           node.long_name || '—') +
-    infoItem('Frequenza',      node.frequency_mhz ? `${node.frequency_mhz} MHz` : '—') +
-    infoItem('Preset',         node.modem_preset || '—') +
-    infoItem('Posizione',      node.position ? `${node.position.lat.toFixed(4)}, ${node.position.lon.toFixed(4)}` : '—') +
-    infoItem('Altezza dal suolo', node.ground_height_m ? `${node.ground_height_m} m` : '—') +
-    infoItem('Hardware',       node.hardware_model || '—') +
-    infoItem('Ultimo contatto', node.last_seen ? new Date(node.last_seen).toLocaleString('it-IT') : '—');
+    infoItem('ID',               `<code>${node.id}</code>`) +
+    infoItem('Name',             node.long_name || '—') +
+    infoItem('Frequency',        node.frequency_mhz ? `${node.frequency_mhz} MHz` : '—') +
+    infoItem('Preset',           node.modem_preset || '—') +
+    infoItem('Position',         node.position ? `${node.position.lat.toFixed(4)}, ${node.position.lon.toFixed(4)}` : '—') +
+    infoItem('Height above ground', node.ground_height_m ? `${node.ground_height_m} m` : '—') +
+    infoItem('Hardware',         node.hardware_model || '—') +
+    infoItem('Last seen',        node.last_seen ? new Date(node.last_seen).toLocaleString('en-GB') : '—');
 
   if (node.antenna) {
     info.innerHTML +=
       infoItem('Antenna', node.antenna.type || '—') +
-      infoItem('Guadagno', node.antenna.gain_dbi ? `${node.antenna.gain_dbi} dBi` : '—') +
+      infoItem('Gain',    node.antenna.gain_dbi ? `${node.antenna.gain_dbi} dBi` : '—') +
       infoItem('TX Power', node.antenna.tx_power_dbm ? `${node.antenna.tx_power_dbm} dBm` : '—') +
-      infoItem('ERP', node.erp_warning !== null ?
+      infoItem('ERP',     node.erp_warning !== null ?
         `${(node.antenna.tx_power_dbm + node.antenna.gain_dbi).toFixed(1)} dBm${node.erp_warning ? ' ⚠' : ''}` : '—');
   }
 
@@ -521,7 +546,7 @@ function closeNodeDetail() {
   loadShadows();
 }
 
-// ── Diagramma di radiazione ────────────────────────────────────────────────
+// ── Radiation diagram ──────────────────────────────────────────────────────
 
 function drawRadiationDiagram(node) {
   const canvas = document.getElementById('radiation-canvas');
@@ -537,7 +562,7 @@ function drawRadiationDiagram(node) {
   const beamwidth = ant?.beamwidth_deg || 360;
   const gainNorm  = ant?.gain_dbi ? Math.min(1, ant.gain_dbi / 12) : 0.5;
 
-  // Background grid
+  // Background grid rings and cardinal direction labels
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   ctx.lineWidth = 1;
   for (let i = 1; i <= 4; i++) {
@@ -545,7 +570,7 @@ function drawRadiationDiagram(node) {
     ctx.arc(cx, cy, (r / 4) * i, 0, Math.PI * 2);
     ctx.stroke();
   }
-  ['N','E','S','O'].forEach((label, i) => {
+  ['N','E','S','W'].forEach((label, i) => {
     const angle = (i * Math.PI / 2) - Math.PI / 2;
     const tx = cx + (r + 12) * Math.cos(angle);
     const ty = cy + (r + 12) * Math.sin(angle);
@@ -617,8 +642,9 @@ async function loadNodeLinksDetail(nodeId) {
     links.slice(0, 10).forEach(link => {
       const peerId = link.node_a_id === nodeId ? link.node_b_id : link.node_a_id;
       const peer   = allNodes[peerId];
-      const lb     = link.min_link_budget;
-      const lbClass = lb >= 15 ? 'lb-good' : lb >= 5 ? 'lb-medium' : 'lb-poor';
+      // min_link_margin: margin above receiver sensitivity (dB)
+      const margin = link.min_link_margin;
+      const mClass = marginClass(margin);
 
       const li = document.createElement('li');
       li.className = 'link-item';
@@ -627,7 +653,7 @@ async function loadNodeLinksDetail(nodeId) {
           <div class="link-name">${peer?.short_name || peerId}</div>
           <div style="font-size:11px;color:var(--text3)">${link.distance_km} km</div>
         </div>
-        <span class="link-budget ${lbClass}">${lb?.toFixed(1)} dB</span>
+        <span class="link-budget ${mClass}" title="Link margin (dB above sensitivity)">${margin?.toFixed(1)} dB</span>
       `;
       li.style.cursor = 'pointer';
       li.addEventListener('click', () => {
@@ -641,7 +667,7 @@ async function loadNodeLinksDetail(nodeId) {
   }
 }
 
-// ── Copertura nodo singolo + shadow ───────────────────────────────────────
+// ── Single-node coverage + shadow zones ───────────────────────────────────
 
 async function loadNodeCoverage(nodeId) {
   // Remove previous single-node layers
@@ -654,12 +680,12 @@ async function loadNodeCoverage(nodeId) {
     window._nodeShadowLayer = null;
   }
   // Hide aggregated layers while viewing a single node
-  if (heatLayer) { map.removeLayer(heatLayer); }
+  if (heatLayer)   { map.removeLayer(heatLayer); }
   if (shadowLayer) { map.removeLayer(shadowLayer); }
 
   // -- Coverage --
   try {
-    const url    = `/api/coverage/${nodeId}/geojson?min_budget=${state.minBudget}`;
+    const url     = `/api/coverage/${nodeId}/geojson?min_budget=${state.minBudget}`;
     const geojson = await apiGet(url);
     if (geojson?.features?.length) {
       const points = geojson.features.map(f => {
@@ -675,13 +701,13 @@ async function loadNodeCoverage(nodeId) {
       }).addTo(map);
     }
   } catch (e) {
-    console.debug('Copertura nodo non disponibile:', e.message);
+    console.debug('Node coverage not available:', e.message);
   }
 
   // -- Shadow zones for this node --
   if (state.showShadows) {
     try {
-      const shadowUrl = `/api/coverage/${nodeId}/shadows`;
+      const shadowUrl    = `/api/coverage/${nodeId}/shadows`;
       const shadowGeojson = await apiGet(shadowUrl);
       if (shadowGeojson?.features?.length) {
         const shadowPoints = shadowGeojson.features.map(f => {
@@ -700,32 +726,32 @@ async function loadNodeCoverage(nodeId) {
         }).addTo(map);
       }
     } catch (e) {
-      console.debug('Shadow zones nodo non disponibili:', e.message);
+      console.debug('Node shadow zones not available:', e.message);
     }
   }
 }
 
-// ── Calcolo ────────────────────────────────────────────────────────────────
+// ── Computation triggers ───────────────────────────────────────────────────
 
 async function computeAll() {
   try {
     await apiPost('/api/coverage/compute/all');
-    showToast('Calcolo avviato per tutti i nodi', 'info');
+    showToast('Calculation started for all nodes', 'info');
   } catch (e) {
-    showToast('Errore: ' + e.message, 'error');
+    showToast('Error: ' + e.message, 'error');
   }
 }
 
 async function computeNode(nodeId) {
   try {
     await apiPost(`/api/coverage/compute/${nodeId}?force=true`);
-    showToast(`Calcolo avviato per ${nodeId}`, 'info');
+    showToast(`Calculation started for ${nodeId}`, 'info');
   } catch (e) {
-    showToast('Errore: ' + e.message, 'error');
+    showToast('Error: ' + e.message, 'error');
   }
 }
 
-// ── Toggle layer ───────────────────────────────────────────────────────────
+// ── Layer toggles ──────────────────────────────────────────────────────────
 
 function toggleHeatmap() {
   if (!heatLayer) return;
@@ -743,7 +769,7 @@ function toggleShadows() {
   if (window._nodeShadowLayer) {
     state.showShadows ? map.addLayer(window._nodeShadowLayer) : map.removeLayer(window._nodeShadowLayer);
   }
-  // If enabling and layer not loaded yet, fetch it
+  // If enabling and the layer has not been loaded yet, fetch it
   if (state.showShadows && !shadowLayer && !selectedNodeId) {
     loadShadows();
   }
@@ -757,7 +783,7 @@ function toggleNodes() {
   state.showNodes ? map.addLayer(nodesLayer) : map.removeLayer(nodesLayer);
 }
 
-// ── Progress ───────────────────────────────────────────────────────────────
+// ── Progress bar ───────────────────────────────────────────────────────────
 
 function showProgress(show) {
   const wrap = document.getElementById('compute-progress-wrap');
