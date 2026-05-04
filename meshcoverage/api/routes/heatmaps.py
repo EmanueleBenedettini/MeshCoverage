@@ -162,6 +162,48 @@ async def get_shadow_zones(
         },
     }
 
+@router.get("/{freq}/{preset}/image")
+async def get_heatmap_image(
+    freq: int,
+    preset: str,
+    min_budget: float = Query(default=None, description="Minimum link budget (dB)"),
+):
+    """
+    Returns the heatmap as a georeferenced PNG for L.imageOverlay.
+    Response: { image: "data:image/png;base64,...", bounds: [[lat_min,lon_min],[lat_max,lon_max]] }
+    """
+    import numpy as np
+    from meshcoverage.processing.raster_renderer import render_coverage_png
+
+    path = _heatmap_path(freq, preset)
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Heatmap {freq}MHz / {preset} not found. Run calculation first."
+        )
+
+    with open(path) as f:
+        geojson = json.load(f)
+
+    features = geojson.get("features", [])
+    threshold = min_budget if min_budget is not None else settings.min_link_budget_db
+    features = [
+        ft for ft in features
+        if ft["properties"].get("link_budget_db", float("-inf")) >= threshold
+    ]
+
+    if not features:
+        raise HTTPException(status_code=404, detail="No data above threshold.")
+
+    lons = np.array([ft["geometry"]["coordinates"][0] for ft in features], dtype=np.float32)
+    lats = np.array([ft["geometry"]["coordinates"][1] for ft in features], dtype=np.float32)
+    lbs  = np.array([ft["properties"]["link_budget_db"]  for ft in features], dtype=np.float32)
+
+    result = render_coverage_png(lats, lons, lbs)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No renderable data.")
+
+    return result
 
 @router.get("/{freq}/{preset}")
 async def get_heatmap(

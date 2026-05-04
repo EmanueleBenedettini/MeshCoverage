@@ -39,104 +39,104 @@ const state = {
 // for each grid cell. No blur, no isolated dots at high zoom: coloured
 // squares that fill the grid cell are shown instead.
 
-const PixelCoverageLayer = L.Layer.extend({
-
-  initialize: function (points, options) {
-    // points: [{lat, lon, lb}]
-    this._points = points || [];
-    L.setOptions(this, L.extend({
-      gridDeg: 0.001,   // grid resolution in degrees (~100 m at mid-EU latitude)
-      opacity: 0.75,
-    }, options));
-  },
-
-  onAdd: function (map) {
-    this._map = map;
-    this._canvas = L.DomUtil.create('canvas', 'leaflet-layer');
-    // pointer-events:none prevents the canvas from swallowing map clicks
-    this._canvas.style.pointerEvents = 'none';
-    map.getPanes().overlayPane.appendChild(this._canvas);
-
-    // viewreset fires when Leaflet resets the pixel-origin to prevent
-    // floating-point drift — must redraw on that event too
-    map.on('viewreset moveend zoomend resize', this._reset, this);
-
-    // NOTE: we do NOT listen to 'move' (pan animation frames).
-    // Repositioning every frame while leaving stale content causes the
-    // coverage layer to appear frozen while tiles scroll underneath.
-    // Leaflet moves the whole overlayPane during pan (good enough visually);
-    // on 'moveend' we reposition and redraw cleanly.
-
-    this._reset();
-    return this;
-  },
-
-  onRemove: function (map) {
-    if (this._canvas) {
-      L.DomUtil.remove(this._canvas);
-      this._canvas = null;
-    }
-    map.off('viewreset moveend zoomend resize', this._reset, this);
-  },
-
-  // Reposition + resize the canvas and repaint all visible points.
-  _reset: function () {
-    if (!this._canvas || !this._map) return;
-
-    var size = this._map.getSize();
-    this._canvas.width  = size.x;
-    this._canvas.height = size.y;
-
-    // Align canvas top-left to the map container's top-left corner.
-    // containerPointToLayerPoint([0,0]) returns the offset needed to
-    // counteract the overlayPane's own CSS transform.
-    var topLeft = this._map.containerPointToLayerPoint([0, 0]);
-    L.DomUtil.setPosition(this._canvas, topLeft);
-
-    this._draw();
-  },
-
-  _draw: function () {
-    if (!this._canvas || !this._map || !this._points.length) return;
-
-    var map    = this._map;
-    var canvas = this._canvas;
-    var ctx    = canvas.getContext('2d');
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Calculate how many pixels one grid cell occupies at the current zoom.
-    // We use the map centre as a reference for an accurate estimate.
-    var GRID   = this.options.gridDeg;
-    var center = map.getCenter();
-    var p0 = map.latLngToContainerPoint(L.latLng(center.lat,        center.lng));
-    var p1 = map.latLngToContainerPoint(L.latLng(center.lat + GRID, center.lng + GRID));
-    // +1 to avoid gaps between adjacent cells; minimum 2 px for visibility
-    var cellW = Math.max(2, Math.ceil(Math.abs(p1.x - p0.x)) + 1);
-    var cellH = Math.max(2, Math.ceil(Math.abs(p1.y - p0.y)) + 1);
-
-    // Small padding so points partially visible at the edge are not clipped
-    var bounds = map.getBounds().pad(0.05);
-
-    var pts = this._points;
-    for (var i = 0, len = pts.length; i < len; i++) {
-      var pt = pts[i];
-
-      // Fast viewport cull
-      if (pt.lat < bounds.getSouth() || pt.lat > bounds.getNorth() ||
-          pt.lon < bounds.getWest()  || pt.lon > bounds.getEast()) continue;
-
-      var cp = map.latLngToContainerPoint(L.latLng(pt.lat, pt.lon));
-      ctx.fillStyle = lbToColor(pt.lb, this.options.opacity);
-      ctx.fillRect(
-        Math.round(cp.x - cellW / 2),
-        Math.round(cp.y - cellH / 2),
-        cellW,
-        cellH
-      );
-    }
-  },
-});
+//const PixelCoverageLayer = L.Layer.extend({
+//
+//  initialize: function (points, options) {
+//    // points: [{lat, lon, lb}]
+//    this._points = points || [];
+//    L.setOptions(this, L.extend({
+//      gridDeg: 0.001,   // grid resolution in degrees (~100 m at mid-EU latitude)
+//      opacity: 0.75,
+//    }, options));
+//  },
+//
+//  onAdd: function (map) {
+//    this._map = map;
+//    this._canvas = L.DomUtil.create('canvas', 'leaflet-layer');
+//    // pointer-events:none prevents the canvas from swallowing map clicks
+//    this._canvas.style.pointerEvents = 'none';
+//    map.getPanes().overlayPane.appendChild(this._canvas);
+//
+//    // viewreset fires when Leaflet resets the pixel-origin to prevent
+//    // floating-point drift — must redraw on that event too
+//    map.on('viewreset moveend zoomend resize', this._reset, this);
+//
+//    // NOTE: we do NOT listen to 'move' (pan animation frames).
+//    // Repositioning every frame while leaving stale content causes the
+//    // coverage layer to appear frozen while tiles scroll underneath.
+//    // Leaflet moves the whole overlayPane during pan (good enough visually);
+//    // on 'moveend' we reposition and redraw cleanly.
+//
+//    this._reset();
+//    return this;
+//  },
+//
+//  onRemove: function (map) {
+//    if (this._canvas) {
+//      L.DomUtil.remove(this._canvas);
+//      this._canvas = null;
+//    }
+//    map.off('viewreset moveend zoomend resize', this._reset, this);
+//  },
+//
+//  // Reposition + resize the canvas and repaint all visible points.
+//  _reset: function () {
+//    if (!this._canvas || !this._map) return;
+//
+//    var size = this._map.getSize();
+//    this._canvas.width  = size.x;
+//    this._canvas.height = size.y;
+//
+//    // Align canvas top-left to the map container's top-left corner.
+//    // containerPointToLayerPoint([0,0]) returns the offset needed to
+//    // counteract the overlayPane's own CSS transform.
+//    var topLeft = this._map.containerPointToLayerPoint([0, 0]);
+//    L.DomUtil.setPosition(this._canvas, topLeft);
+//
+//    this._draw();
+//  },
+//
+//  _draw: function () {
+//    if (!this._canvas || !this._map || !this._points.length) return;
+//
+//    var map    = this._map;
+//    var canvas = this._canvas;
+//    var ctx    = canvas.getContext('2d');
+//
+//    ctx.clearRect(0, 0, canvas.width, canvas.height);
+//
+//    // Calculate how many pixels one grid cell occupies at the current zoom.
+//    // We use the map centre as a reference for an accurate estimate.
+//    var GRID   = this.options.gridDeg;
+//    var center = map.getCenter();
+//    var p0 = map.latLngToContainerPoint(L.latLng(center.lat,        center.lng));
+//    var p1 = map.latLngToContainerPoint(L.latLng(center.lat + GRID, center.lng + GRID));
+//    // +1 to avoid gaps between adjacent cells; minimum 2 px for visibility
+//    var cellW = Math.max(2, Math.ceil(Math.abs(p1.x - p0.x)) + 1);
+//    var cellH = Math.max(2, Math.ceil(Math.abs(p1.y - p0.y)) + 1);
+//
+//    // Small padding so points partially visible at the edge are not clipped
+//    var bounds = map.getBounds().pad(0.05);
+//
+//    var pts = this._points;
+//    for (var i = 0, len = pts.length; i < len; i++) {
+//      var pt = pts[i];
+//
+//      // Fast viewport cull
+//      if (pt.lat < bounds.getSouth() || pt.lat > bounds.getNorth() ||
+//          pt.lon < bounds.getWest()  || pt.lon > bounds.getEast()) continue;
+//
+//      var cp = map.latLngToContainerPoint(L.latLng(pt.lat, pt.lon));
+//      ctx.fillStyle = lbToColor(pt.lb, this.options.opacity);
+//      ctx.fillRect(
+//        Math.round(cp.x - cellW / 2),
+//        Math.round(cp.y - cellH / 2),
+//        cellW,
+//        cellH
+//      );
+//    }
+//  },
+//});
 
 // ── Link margin colour gradient ────────────────────────────────────────────
 //
@@ -150,11 +150,11 @@ const PixelCoverageLayer = L.Layer.extend({
 //  margin ≥  30  →  green      #22c55e
 
 function lbToColor(lb, alpha) {
-  var maxLB = 30;
-  var t = Math.max(0, Math.min(1, (lb + 10) / (maxLB + 10)));
+  const maxLB = 30;
+  const t = Math.max(0, Math.min(1, (lb + 10) / (maxLB + 10)));
 
   // [threshold_t, r, g, b]
-  var stops = [
+  const stops = [
     [0.00,  30,  58,  95],
     [0.30,  29,  78, 216],
     [0.50, 245, 158,  11],
@@ -162,17 +162,14 @@ function lbToColor(lb, alpha) {
     [1.00,  34, 197,  94],
   ];
 
-  var i = 0;
+  let i = 0;
   while (i < stops.length - 2 && stops[i + 1][0] <= t) i++;
-
-  var t0 = stops[i][0], t1 = stops[i + 1][0];
-  var f  = (t1 > t0) ? (t - t0) / (t1 - t0) : 0;
-
-  var r = Math.round(stops[i][1] + f * (stops[i + 1][1] - stops[i][1]));
-  var g = Math.round(stops[i][2] + f * (stops[i + 1][2] - stops[i][2]));
-  var b = Math.round(stops[i][3] + f * (stops[i + 1][3] - stops[i][3]));
-
-  return 'rgba(' + r + ',' + g + ',' + b + ',' + (alpha || 0.72) + ')';
+  const t0 = stops[i][0], t1 = stops[i + 1][0];
+  const f  = (t1 > t0) ? (t - t0) / (t1 - t0) : 0;
+  const r = Math.round(stops[i][1] + f * (stops[i + 1][1] - stops[i][1]));
+  const g = Math.round(stops[i][2] + f * (stops[i + 1][2] - stops[i][2]));
+  const b = Math.round(stops[i][3] + f * (stops[i + 1][3] - stops[i][3]));
+  return 'rgba(' + r + ',' + g + ',' + b + ',' + (alpha || 0.75) + ')';
 }
 
 // ── Link margin → line colour ──────────────────────────────────────────────
@@ -329,38 +326,29 @@ async function applyFilters() {
   ]);
 }
 
-// ── Heatmap ────────────────────────────────────────────────────────────────
-
+// ── Heatmap (georeferenced PNG overlay) ───────────────────────────────────
 async function loadHeatmap() {
   if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
   if (!state.freq || !state.preset || !state.showHeatmap) return;
 
   try {
-    const url = `/api/heatmaps/${state.freq}/${state.preset}?min_budget=${state.minBudget}`;
-    const geojson = await apiGet(url);
-    if (!geojson?.features?.length) return;
+    const url = `/api/heatmaps/${state.freq}/${state.preset}/image?min_budget=${state.minBudget}`;
+    const data = await apiGet(url);
+    if (!data?.image || !data?.bounds) return;
 
-    const maxLB = 30;
-    const points = geojson.features.map(f => {
-      const [lon, lat] = f.geometry.coordinates;
-      const lb = f.properties.link_budget_db || 0;
-      const intensity = Math.max(0, Math.min(1, (lb + 10) / (maxLB + 10)));
-      return [lat, lon, intensity];
+    heatLayer = L.imageOverlay(data.image, data.bounds, {
+      opacity: 0.78,
+      interactive: false,
     });
 
-    heatLayer = new PixelCoverageLayer(points);
-
-    if (state.showHeatmap) {
-      map.addLayer(heatLayer);
-    }
+    if (state.showHeatmap) map.addLayer(heatLayer);
 
   } catch (e) {
-    console.debug('Heatmap not available:', e.message);
+    console.warn('Heatmap load failed:', e.message);
   }
 }
 
 // ── Shadow zones ───────────────────────────────────────────────────────────
-
 /**
  * Renders terrain shadow zones using a canvas-based dot overlay.
  * Shadow zones are displayed as semi-transparent dark purple/grey dots
@@ -404,7 +392,7 @@ async function loadShadows() {
 
   } catch (e) {
     // Shadow data not yet computed — not a blocking error
-    console.debug('Shadow zones not available:', e.message);
+    console.warn('Shadow zones not available:', e.message);
   }
 }
 
@@ -668,9 +656,7 @@ async function loadNodeLinksDetail(nodeId) {
 }
 
 // ── Single-node coverage + shadow zones ───────────────────────────────────
-
 async function loadNodeCoverage(nodeId) {
-  // Remove previous single-node layers
   if (window._nodeCoverageLayer) {
     map.removeLayer(window._nodeCoverageLayer);
     window._nodeCoverageLayer = null;
@@ -679,43 +665,34 @@ async function loadNodeCoverage(nodeId) {
     map.removeLayer(window._nodeShadowLayer);
     window._nodeShadowLayer = null;
   }
-  // Hide aggregated layers while viewing a single node
-  if (heatLayer)   { map.removeLayer(heatLayer); }
-  if (shadowLayer) { map.removeLayer(shadowLayer); }
+  if (heatLayer)   map.removeLayer(heatLayer);
+  if (shadowLayer) map.removeLayer(shadowLayer);
 
-  // -- Coverage --
+  // -- Single-node coverage image --
   try {
-    const url     = `/api/coverage/${nodeId}/geojson?min_budget=${state.minBudget}`;
-    const geojson = await apiGet(url);
-    if (geojson?.features?.length) {
-      const points = geojson.features.map(f => {
-        const [lon, lat] = f.geometry.coordinates;
-        const lb = f.properties.link_budget_db || 0;
-        const intensity = Math.max(0, Math.min(1, (lb + 10) / 40));
-        return [lat, lon, intensity];
+    const url  = `/api/coverage/${nodeId}/image?min_budget=${state.minBudget}`;
+    const data = await apiGet(url);
+    if (data?.image && data?.bounds) {
+      window._nodeCoverageLayer = L.imageOverlay(data.image, data.bounds, {
+        opacity: 0.80,
+        interactive: false,
       });
-
-      window._nodeCoverageLayer = L.heatLayer(points, {
-        radius: 15, blur: 12, maxZoom: 17,
-        gradient: { 0: '#1e3a5f', 0.4: '#3b82f6', 0.7: '#f97316', 1: '#22c55e' },
-      }).addTo(map);
+      map.addLayer(window._nodeCoverageLayer);
     }
   } catch (e) {
-    console.debug('Node coverage not available:', e.message);
+    console.warn('Node coverage image not available:', e.message);
   }
 
-  // -- Shadow zones for this node --
+  // -- Shadow zones (leaflet.heat, unchanged) --
   if (state.showShadows) {
     try {
-      const shadowUrl    = `/api/coverage/${nodeId}/shadows`;
-      const shadowGeojson = await apiGet(shadowUrl);
+      const shadowGeojson = await apiGet(`/api/coverage/${nodeId}/shadows`);
       if (shadowGeojson?.features?.length) {
-        const shadowPoints = shadowGeojson.features.map(f => {
+        const pts = shadowGeojson.features.map(f => {
           const [lon, lat] = f.geometry.coordinates;
           return [lat, lon, 1.0];
         });
-
-        window._nodeShadowLayer = L.heatLayer(shadowPoints, {
+        window._nodeShadowLayer = L.heatLayer(pts, {
           radius: 12, blur: 8, maxZoom: 17,
           gradient: {
             0.0: 'rgba(30,10,60,0)',
@@ -726,7 +703,7 @@ async function loadNodeCoverage(nodeId) {
         }).addTo(map);
       }
     } catch (e) {
-      console.debug('Node shadow zones not available:', e.message);
+      console.warn('Node shadow zones not available:', e.message);
     }
   }
 }

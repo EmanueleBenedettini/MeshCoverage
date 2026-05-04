@@ -295,6 +295,43 @@ async def get_node_coverage_geojson(
         },
     }
 
+@router.get("/{node_id}/image")
+async def get_node_coverage_image(
+    node_id: str,
+    min_budget: float = Query(default=None),
+):
+    """
+    Returns the single-node coverage as a georeferenced PNG for L.imageOverlay.
+    Response: { image: "data:image/png;base64,...", bounds: [[lat_min,lon_min],[lat_max,lon_max]] }
+    """
+    from meshcoverage.processing.viewshed import load_viewshed
+    from meshcoverage.processing.raster_renderer import render_coverage_png
+
+    safe_id  = node_id.lstrip("!").lower()
+    path     = settings.coverage_dir / f"coverage_{safe_id}.npz"
+
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Coverage not computed. Run calculation first.",
+        )
+
+    data = load_viewshed(path)
+    if data is None or len(data["lats"]) == 0:
+        raise HTTPException(status_code=404, detail="No coverage data.")
+
+    threshold = min_budget if min_budget is not None else settings.min_link_budget_db
+    mask = data["link_budget"] >= threshold
+
+    result = render_coverage_png(
+        data["lats"][mask],
+        data["lons"][mask],
+        data["link_budget"][mask],
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="No renderable data.")
+
+    return result
 
 @router.get("/{node_id}/shadows")
 async def get_node_shadow_zones(
