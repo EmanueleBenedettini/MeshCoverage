@@ -5,6 +5,7 @@ first Fresnel zone along the entire path.
 from __future__ import annotations
 import math
 import numpy as np
+from meshcoverage.processing.dem_handler import K_EARTH_EFFECTIVE_M
 
 C = 299_792_458.0
 FRESNEL_CLEARANCE_FRACTION = 0.6
@@ -110,8 +111,6 @@ def check_los(
     if total_distance_m <= 0 or len(profile_distances_m) == 0:
         return True, float("inf")
 
-    from meshcoverage.processing.dem_handler import earth_bulge_m
-
     min_clearance = float("inf")
 
     for d1, elev in zip(profile_distances_m, profile_elevations):
@@ -122,8 +121,7 @@ def check_los(
         los_height = tx_height_m + (rx_height_m - tx_height_m) * (d1 / total_distance_m)
 
         # Earth bulge correction
-        bulge = earth_bulge_m(d1) if apply_earth_bulge else 0.0
-
+        bulge = (d1 * (total_distance_m - d1)) / (2.0 * K_EARTH_EFFECTIVE_M) if apply_earth_bulge else 0.0
         clearance = los_height - (float(elev) + bulge)
         min_clearance = min(min_clearance, clearance)
 

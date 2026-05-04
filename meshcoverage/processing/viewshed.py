@@ -47,7 +47,8 @@ from typing import Optional
 import numpy as np
 
 from meshcoverage.processing.dem_handler import (
-    haversine_m, bearing_deg, earth_bulge_m, EARTH_RADIUS_M,
+    haversine_m, bearing_deg, earth_bulge_m, path_earth_bulge_m,
+    EARTH_RADIUS_M, K_EARTH_EFFECTIVE_M,
     get_dem_handler, get_dsm_handler,
 )
 from meshcoverage.processing.fresnel import check_los, check_fresnel_clearance
@@ -314,9 +315,7 @@ def _compute_point(args: tuple) -> Optional[dict]:
         )
 
         # ── Earth bulge (vectorised) ────────────────────────────────────
-        bulge = np.fromiter(
-            (earth_bulge_m(d) for d in distances_m), dtype=np.float64, count=n_samples
-        )
+        bulge = (distances_m * (dist_m - distances_m)) / (2.0 * K_EARTH_EFFECTIVE_M)
         elevations_corr = np.where(np.isnan(elevations), np.nan, elevations + bulge)
 
         # ── LOS and Fresnel ────────────────────────────────────────────

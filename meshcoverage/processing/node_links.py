@@ -24,9 +24,13 @@ from collections import defaultdict
 from meshcoverage.config import settings
 from meshcoverage import database
 from meshcoverage.models.node import Node
-from meshcoverage.processing.dem_handler import get_dem_handler, haversine_m, bearing_deg
+from meshcoverage.processing.dem_handler import (
+    get_dem_handler, haversine_m, bearing_deg, K_EARTH_EFFECTIVE_M,
+)
 from meshcoverage.processing.fresnel import check_los, check_fresnel_clearance
 from meshcoverage.processing.link_budget import calculate_link_budget
+
+import numpy as np
 
 log = logging.getLogger(__name__)
 
@@ -66,13 +70,9 @@ def _compute_link(node_a: Node, node_b: Node, dem) -> dict | None:
         n_samples,
     )
 
-    import numpy as np
-    from meshcoverage.processing.dem_handler import earth_bulge_m
-    elevations_corr = np.where(
-        np.isnan(elevations),
-        np.nan,
-        elevations + np.array([earth_bulge_m(d) for d in distances_m]),
-    )
+    distances_arr = np.asarray(distances_m)
+    bulge = (distances_arr * (dist_m - distances_arr)) / (2.0 * K_EARTH_EFFECTIVE_M)
+    elevations_corr = np.where(np.isnan(elevations), np.nan, elevations + bulge)
 
     # LOS check
     los_ok, _ = check_los(distances_m, elevations_corr, alt_a, alt_b, dist_m, apply_earth_bulge=False)

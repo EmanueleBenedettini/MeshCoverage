@@ -374,7 +374,25 @@ def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def earth_bulge_m(distance_m: float) -> float:
+    """
+    Legacy sagitta approximation d²/(2·R_eff).
+    Only meaningful when distance_m is the **total** path length and
+    you want the maximum bulge at the midpoint.
+    Use path_earth_bulge_m() for intermediate profile points.
+    """
     return (distance_m ** 2) / (2 * K_EARTH_EFFECTIVE_M)
+
+
+def path_earth_bulge_m(d1_m: float, total_m: float) -> float:
+    """
+    Earth-bulge correction at distance d1_m from the transmitter along a
+    path of total length total_m (ITU-R effective-earth-radius model).
+
+        h = d1 · (D − d1) / (2 · k · Rₑ)
+
+    Zero at both endpoints, maximum at the midpoint.
+    """
+    return (d1_m * (total_m - d1_m)) / (2 * K_EARTH_EFFECTIVE_M)
 
 
 def destination_point(
