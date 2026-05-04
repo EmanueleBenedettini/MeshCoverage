@@ -98,7 +98,7 @@ class Settings(BaseSettings):
 
     receiver_height_m: float = Field(default=1.5)
     receiver_gain_dbi: float = Field(default=2.15)
-    min_link_budget_db: float = Field(default=0.0)
+    min_link_margin_db: float = Field(default=0.0)
     erp_warning_dbm: float = Field(default=27.0)
 
     # Heatmap

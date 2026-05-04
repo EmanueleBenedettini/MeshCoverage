@@ -270,27 +270,30 @@ def _compute_point(args: tuple) -> Optional[dict]:
             return None
 
         # ── Free-space pre-filter ──────────────────────────────────────
-        _fspl = fspl_db(dist_m, freq_mhz)
-        _atm  = atmospheric_loss_db(dist_m, freq_mhz)
-        sensitivity_dbm = _worker_state.get('sensitivity_dbm', -140.0)
-        best_case_margin = (
-            tx_power_dbm + ant_gain_dbi + rx_gain_dbi
-            - _fspl - _atm - sensitivity_dbm
-        )
-        if best_case_margin < -20.0:
+        #_fspl = fspl_db(dist_m, freq_mhz)
+        #_atm  = atmospheric_loss_db(dist_m, freq_mhz)
+        #sensitivity_dbm = _worker_state.get('sensitivity_dbm', -140.0)
+        #best_case_margin = (
+        #    tx_power_dbm + ant_gain_dbi + rx_gain_dbi
+        #    - _fspl - _atm - sensitivity_dbm
+        #)
+        best_case_margin = calculate_link_budget(dist_m, 
+                                                 freq_mhz, 
+                                                 modem_preset, 
+                                                 tx_power_dbm, 
+                                                 ant_gain_dbi
+                                                 )["link_margin_db"]
+        if best_case_margin < -10.0:    #if surely below sensitivity, terminate early without DEM access
             return None
 
         brng = bearing_deg(ant_lat, ant_lon, target_lat, target_lon)
-
-        if ant_beamwidth < 360.0:
-            diff = abs(((brng - ant_azimuth) + 180) % 360 - 180)
-            if diff > ant_beamwidth / 2.0:
-                return None
 
         if ant_beamwidth >= 360.0:
             gain_used = ant_gain_dbi
         else:
             diff = abs(((brng - ant_azimuth) + 180) % 360 - 180)
+            if diff > ant_beamwidth / 2.0:
+                return None
             half_bw = ant_beamwidth / 2.0
             factor = max(0.0, 1.0 - diff / half_bw)
             gain_used = ant_gain_min + factor * (ant_gain_max - ant_gain_min)
@@ -326,7 +329,7 @@ def _compute_point(args: tuple) -> Optional[dict]:
             return {
                 "lat": target_lat, "lon": target_lon,
                 "distance_m": dist_m, "los": False,
-                "fresnel_ok": False, "link_budget_db": float("-inf"),
+                "fresnel_ok": False, "link_margin_db": float("-inf"),
                 "bearing": brng, "shadow": True,
             }
 
@@ -346,7 +349,7 @@ def _compute_point(args: tuple) -> Optional[dict]:
             "lat": target_lat, "lon": target_lon,
             "distance_m": dist_m, "los": True,
             "fresnel_ok": fresnel_ok,
-            "link_budget_db": lb["link_margin_db"],
+            "link_margin_db": lb["link_margin_db"],
             "bearing": brng, "shadow": False,
         }
 
@@ -1030,7 +1033,7 @@ def save_viewshed(results: list[dict], output_path: Path, metadata: dict):
         distances=np.array([r["distance_m"]      for r in covered]),
         los=np.array([r["los"]              for r in covered], dtype=bool),
         fresnel_ok=np.array([r["fresnel_ok"]     for r in covered], dtype=bool),
-        link_budget=np.array([r["link_budget_db"] for r in covered]),
+        link_margin_db=np.array([r["link_margin_db"] for r in covered]),
         bearings=np.array([r["bearing"]         for r in covered]),
         # ── Shadow zone points ───────────────────────────────────────────
         shadow_lats=np.array([r["lat"]        for r in shadows]),
@@ -1065,7 +1068,7 @@ def load_viewshed(path: Path) -> Optional[dict]:
             "distances":        data["distances"],
             "los":              data["los"],
             "fresnel_ok":       data["fresnel_ok"],
-            "link_budget":      data["link_budget"],
+            "link_margin_db":   data["link_margin_db"],
             "bearings":         data["bearings"] if "bearings" in files else np.array([]),
             # Shadow zone arrays (present only in files saved by the new code)
             "shadow_lats":      data["shadow_lats"]      if "shadow_lats"      in files else np.array([]),

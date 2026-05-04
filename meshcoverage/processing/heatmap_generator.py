@@ -85,14 +85,14 @@ def _generate_single_heatmap(freq: int, preset: str, nodes: list):
 
         # --- Coverage points ---
         if len(data["lats"]) > 0:
-            mask = data["link_budget"] >= settings.min_link_budget_db
+            mask = data["link_margin_db"] >= settings.min_link_margin_db
             for i in np.where(mask)[0]:
                 lat = float(data["lats"][i])
                 lon = float(data["lons"][i])
-                lb = float(data["link_budget"][i])
+                lm = float(data["link_margin_db"][i])
                 key = _grid_key(lat, lon)
-                if key not in coverage_grid or coverage_grid[key] < lb:
-                    coverage_grid[key] = lb
+                if key not in coverage_grid or coverage_grid[key] < lm:
+                    coverage_grid[key] = lm
 
         # --- Shadow zone points ---
         shadow_lats = data.get("shadow_lats", np.array([]))
@@ -131,10 +131,10 @@ def _generate_single_heatmap(freq: int, preset: str, nodes: list):
                     "coordinates": [round(lon, 6), round(lat, 6)],
                 },
                 "properties": {
-                    "link_budget_db": round(lb, 2),
+                    "link_budget_db": round(lm, 2),
                 },
             }
-            for (lat, lon), lb in coverage_grid.items()
+            for (lat, lon), lm in coverage_grid.items()
         ]
 
         geojson = {

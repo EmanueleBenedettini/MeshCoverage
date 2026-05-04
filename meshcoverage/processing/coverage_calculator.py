@@ -225,7 +225,7 @@ class CoverageCalculator:
             "shadow_point_count": len(shadows),
             "covered_points": len([
                 r for r in covered
-                if r.get("link_budget_db", float("-inf")) >= settings.min_link_budget_db
+                if r.get("link_margin_db", float("-inf")) >= settings.min_link_margin_db
             ]),
             "duration_s": round(time.time() - start_time, 1),
         }
