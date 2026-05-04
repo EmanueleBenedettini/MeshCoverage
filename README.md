@@ -1,4 +1,5 @@
 # MeshCoverage
+<img width="834" height="655" alt="Immagine 2026-05-04 222825" src="https://github.com/user-attachments/assets/012adbca-4dcc-4f95-a58b-5631f1e465cd" />
 
 **MeshCoverage** is a complete system for calculating and visualising radio coverage areas of a Meshtastic antenna mesh. It collects data from nodes via MQTT or direct connection, calculates coverage using DEM (Digital Elevation Model) data with visibility analysis, Fresnel zone and link budget calculations, and presents results on an interactive map.
 
