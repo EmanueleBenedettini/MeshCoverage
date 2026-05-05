@@ -42,7 +42,7 @@ REST API automatically documented at `/api/docs`
 See [INSTALL.md](INSTALL.md) for complete instructions.
 
 ```bash
-git clone https://github.com/your-org/meshcoverage.git
+git clone https://github.com/EmanueleBenedettini/meshcoverage.git
 cd MeshCoverage
 cp .env.example .env
 # Edit .env with your configuration
