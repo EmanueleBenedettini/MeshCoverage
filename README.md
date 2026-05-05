@@ -3,29 +3,6 @@
 
 **MeshCoverage** is a complete system for calculating and visualising radio coverage areas of a Meshtastic antenna mesh. It collects data from nodes via MQTT or direct connection, calculates coverage using DEM (Digital Elevation Model) data with visibility analysis, Fresnel zone and link budget calculations, and presents results on an interactive map.
 
----
-
-## Architecture
-
-```
-MeshCoverage/
-├── proto/                   # Protobuf definitions
-├── scripts/                 # Utility and scheduling scripts
-├── src/
-│   ├── config.py            # Centralised configuration
-│   ├── database.py          # Node JSON database management
-│   ├── models/              # Data models
-│   ├── input/               # Meshtastic data acquisition service
-│   ├── processing/          # Coverage calculation pipeline
-│   ├── api/                 # FastAPI REST API
-│   └── web/                 # Web frontend (Leaflet.js)
-└── data/
-    ├── nodes/               # Node database (JSON)
-    ├── dem/                 # DEM files (GeoTIFF) - managed by admin
-    ├── coverage/            # Coverage results per node (.npz)
-    ├── heatmaps/            # GeoJSON heatmaps by frequency/preset
-    └── links/               # Inter-node connections (JSON)
-```
 
 ## Main Components
 
@@ -62,7 +39,6 @@ REST API automatically documented at `/api/docs`
 ---
 
 ## Quickstart
-
 See [INSTALL.md](INSTALL.md) for complete instructions.
 
 ```bash
@@ -75,53 +51,8 @@ docker-compose up -d
 
 The web interface will be available at `http://localhost:8000`
 
----
 
-## Data Formats
-
-### Node (nodes/nodes.json)
-```json
-{
-  "!aabbccdd": {
-    "id": "!aabbccdd",
-    "short_name": "NODE",
-    "long_name": "My Node",
-    "hardware_model": "TBEAM",
-    "position": {"lat": 45.123, "lon": 9.456},
-    "altitude": 250.0,
-    "frequency": 868,
-    "modem_preset": "MEDIUM_FAST",
-    "last_seen": "2024-01-01T12:00:00Z",
-    "antenna": {
-      "tx_power_dbm": 27,
-      "type": "dipole",
-      "gain_dbi": 2.15,
-      "azimuth_deg": 0,
-      "beamwidth_deg": 360,
-      "gain_min_dbi": 2.15,
-      "gain_max_dbi": 2.15
-    }
-  }
-}
-```
-
-### Heatmap (heatmaps/heatmap_868_MEDIUM_FAST.geojson)
-GeoJSON FeatureCollection with `link_budget_dbm` property for each point.
-
-### Connections (links/links_868_MEDIUM_FAST.json)
-```json
-[
-  {
-    "node_a": "!aabbccdd",
-    "node_b": "!11223344",
-    "distance_km": 12.5,
-    "link_budget_dbm": 15.3,
-    "los": true
-  }
-]
-```
 
 ---
-
 ## Licence
 GPL-3.0 license 
