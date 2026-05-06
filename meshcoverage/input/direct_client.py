@@ -53,7 +53,7 @@ class DirectClient:
         try:
             nodes = parse_mqtt_packet(packet)
             for node in nodes:
-                database.upsert_node(node)
+                database.upsert_node(node, from_auto_source=True)
                 self.stats["nodes_updated"] += 1
                 if self.on_node_update:
                     self.on_node_update(node)
@@ -75,7 +75,7 @@ class DirectClient:
             for node_id_int, node_data in nodes.items():
                 node = parse_meshtastic_api_node(node_data)
                 if node:
-                    database.upsert_node(node)
+                    database.upsert_node(node, from_auto_source=True)
                     count += 1
                     if self.on_node_update:
                         self.on_node_update(node)

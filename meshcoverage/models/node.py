@@ -2,10 +2,11 @@
 Modelli dati per i nodi Meshtastic.
 """
 from __future__ import annotations
+import math
 from typing import Optional, Literal
 from datetime import datetime, timezone
 from enum import Enum
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +141,25 @@ class Position(BaseModel):
     def __repr__(self):
         return f"Position(lat={self.lat:.6f}, lon={self.lon:.6f})"
 
+    @property
+    def precision_bits(self) -> int:
+        """Approximate position precision in bits, based on coordinate resolution."""
+        def coord_resolution(value: float) -> float:
+            s = f"{value:.10f}".rstrip("0")
+            if "." not in s:
+                return 1.0
+            decimals = len(s.split(".")[1])
+            return 10.0 ** -decimals
+
+        lat_res = coord_resolution(self.lat)
+        lon_res = coord_resolution(self.lon)
+        res = min(lat_res, lon_res)
+        if res <= 0.0:
+            return 0
+
+        bits = int(math.floor(math.log2(360.0 / res)))
+        return max(bits, 0)
+
 
 class AntennaParams(BaseModel):
     """
@@ -209,6 +229,8 @@ class Node(BaseModel):
     hardware_model: Optional[str] = None
     firmware: Optional[str] = None
     position: Optional[Position] = None
+    altitude_m: Optional[float] = Field(default=None, description="Altitudine GPS del nodo (m slm)")
+    elevation_m: Optional[float] = Field(default=None, description="Quota del terreno sotto il nodo (m slm) ottenuta da DEM")
     ground_height_m: Optional[float] = Field(default=None, description="Altezza antenna dal suolo (m)")
     frequency_mhz: Optional[int] = Field(default=None, description="868, 433 o 915 MHz")
     modem_preset: Optional[str] = Field(default=None, description="Preset modem Meshtastic")
@@ -235,6 +257,15 @@ class Node(BaseModel):
             raise ValueError(f"Preset non valido: {v!r}")
         return v
 
+    @model_validator(mode="before")
+    def compute_ground_height(cls, values):
+        altitude = values.get("altitude_m")
+        elevation = values.get("elevation_m")
+        ground_height = values.get("ground_height_m")
+        if ground_height is None and altitude is not None and elevation is not None and altitude >= elevation:
+            values["ground_height_m"] = altitude - elevation
+        return values
+
     @property
     def is_complete(self) -> bool:
         """
@@ -242,6 +273,8 @@ class Node(BaseModel):
         Richiede: posizione, frequenza, modem_preset, e parametri antenna.
         """
         if self.position is None:
+            return False
+        if self.position.precision_bits < 20:
             return False
         if self.frequency_mhz is None or self.modem_preset is None:
             return False
@@ -279,7 +312,10 @@ class NodeUpdate(BaseModel):
     short_name: Optional[str] = None
     long_name: Optional[str] = None
     position: Optional[Position] = None
+    altitude_m: Optional[float] = None
+    elevation_m: Optional[float] = None
     ground_height_m: Optional[float] = None
+    auto_update: Optional[bool] = None
     frequency_mhz: Optional[int] = None
     modem_preset: Optional[str] = None
     antenna: Optional[AntennaParams] = None

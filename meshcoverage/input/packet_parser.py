@@ -34,12 +34,13 @@ PRESET_INT_TO_STR = {
 }
 PRESET_STR_TO_INT = {v: k for k, v in PRESET_INT_TO_STR.items()}
 
-# Mapping channel frequency → MHz
-FREQ_CHANNEL_MAPS = {
-    "LongFast": 868, "LongSlow": 868, "LongMod": 868,
-    "MedFast": 868, "MedSlow": 868,
-    "ShortFast": 868, "ShortSlow": 868, "ShortTurbo": 868,
-}
+# Wrong, these channel work at multiple frequencies depending on region. Better to extract frequency from config if possible.
+## Mapping channel frequency → MHz
+#FREQ_CHANNEL_MAPS = {
+#    "LongFast": 868, "LongSlow": 868, "LongMod": 868,
+#    "MedFast": 868, "MedSlow": 868,
+#    "ShortFast": 868, "ShortSlow": 868, "ShortTurbo": 868,
+#}
 
 # Mapping role int → NodeRole string
 ROLE_INT_TO_STR: dict[int, str] = {
@@ -117,10 +118,20 @@ def parse_position(packet: dict) -> Optional[Node]:
         if lat == 0.0 and lon == 0.0:
             return None
 
+        elevation_m = None
+        try:
+            from meshcoverage.processing.dem_handler import get_dem_handler
+            dem = get_dem_handler()
+            if dem.covers(lat, lon):
+                elevation_m = dem.get_elevation(lat, lon)
+        except Exception:
+            elevation_m = None
+
         return Node(
             id=node_id_to_hex(from_num),
             position=Position(lat=lat, lon=lon),
-            ground_height_m=alt,
+            altitude_m=alt,
+            elevation_m=elevation_m,
             last_seen=datetime.now(timezone.utc),
         )
     except Exception as e:
@@ -261,6 +272,16 @@ def parse_meshtastic_api_node(api_node: dict) -> Optional[Node]:
             elif isinstance(raw_role, str):
                 role_str = raw_role.upper()
 
+        elevation_m = None
+        if position is not None:
+            try:
+                from meshcoverage.processing.dem_handler import get_dem_handler
+                dem = get_dem_handler()
+                if dem.covers(position.lat, position.lon):
+                    elevation_m = dem.get_elevation(position.lat, position.lon)
+            except Exception:
+                elevation_m = None
+
         return Node(
             id=node_id,
             role=role_str,
@@ -268,7 +289,8 @@ def parse_meshtastic_api_node(api_node: dict) -> Optional[Node]:
             long_name=user.get("longName"),
             hardware_model=hw_model,
             position=position,
-            ground_height_m=pos.get("altitude"),
+            altitude_m=pos.get("altitude"),
+            elevation_m=elevation_m,
             last_seen=last_seen,
         )
     except Exception as e:

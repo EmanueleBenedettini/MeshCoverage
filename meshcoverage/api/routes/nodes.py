@@ -38,7 +38,10 @@ class NodeResponse(BaseModel):
     hardware_model: Optional[str]
     firmware: Optional[str]
     position: Optional[Position]
+    altitude_m: Optional[float]
+    elevation_m: Optional[float]
     ground_height_m: Optional[float]
+    auto_update: bool
     frequency_mhz: Optional[int]
     modem_preset: Optional[str]
     antenna: Optional[AntennaParams]
@@ -66,7 +69,10 @@ class NodeCreateRequest(BaseModel):
     short_name: Optional[str] = None
     long_name: Optional[str] = None
     position: Optional[Position] = None
+    altitude_m: Optional[float] = None
+    elevation_m: Optional[float] = None
     ground_height_m: Optional[float] = None
+    auto_update: bool = True
     frequency_mhz: Optional[int] = None
     modem_preset: Optional[str] = None
     antenna: Optional[AntennaParams] = None
@@ -163,6 +169,8 @@ async def create_node(req: NodeCreateRequest):
         short_name=req.short_name,
         long_name=req.long_name,
         position=req.position,
+        altitude_m=req.altitude_m,
+        elevation_m=req.elevation_m,
         ground_height_m=req.ground_height_m,
         frequency_mhz=req.frequency_mhz,
         modem_preset=req.modem_preset,
@@ -188,6 +196,8 @@ async def update_node(node_id: str, req: NodeCreateRequest):
         short_name=req.short_name,
         long_name=req.long_name,
         position=req.position,
+        altitude_m=req.altitude_m,
+        elevation_m=req.elevation_m,
         ground_height_m=req.ground_height_m,
         frequency_mhz=req.frequency_mhz,
         modem_preset=req.modem_preset,

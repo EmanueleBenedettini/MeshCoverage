@@ -46,6 +46,8 @@ function initModal() {
   document.getElementById('btn-add-node')?.addEventListener('click', () => {
     openModal(null);
   });
+  const form = document.getElementById('node-form');
+  if (form) attachHeightSync(form);
 }
 
 function openModal(nodeId) {
@@ -84,10 +86,13 @@ function fillForm(form, node) {
     set('lat', node.position.lat);
     set('lon', node.position.lon);
   }
+  set('altitude_m', node.altitude_m);
+  set('elevation_m', node.elevation_m);
   set('ground_height_m', node.ground_height_m);
   set('frequency_mhz', node.frequency_mhz);
   set('modem_preset', node.modem_preset);
-  set('auto_update', node.auto_update);
+  const autoUpdateEl = form.querySelector('[name="auto_update"]');
+  if (autoUpdateEl) autoUpdateEl.checked = !!node.auto_update;
   set('notes', node.notes);
   if (node.antenna) {
     set('tx_power_dbm', node.antenna.tx_power_dbm);
@@ -98,6 +103,7 @@ function fillForm(form, node) {
     set('gain_min_dbi', node.antenna.gain_min_dbi);
     set('gain_max_dbi', node.antenna.gain_max_dbi);
   }
+  updateDerivedHeight(form);
 }
 
 function closeModal() {
@@ -115,16 +121,23 @@ async function saveNode() {
   };
   const gf = name => { const v = g(name); return v ? parseFloat(v) : null; };
   const gi = name => { const v = g(name); return v ? parseInt(v) : null; };
+  const gb = name => {
+    const el = form.querySelector(`[name="${name}"]`);
+    return el ? el.checked : false;
+  };
 
   const body = {
     id: g('id'),
     role: g('role'),
     short_name: g('short_name'),
     long_name: g('long_name'),
+    position: undefined,
+    altitude_m: gf('altitude_m'),
+    elevation_m: gf('elevation_m'),
+    ground_height_m: gf('ground_height_m'),
     frequency_mhz: gi('frequency_mhz'),
     modem_preset: g('modem_preset'),
-    ground_height_m: gf('ground_height_m'),
-    auto_update: g('auto_update'),
+    auto_update: gb('auto_update'),
     notes: g('notes'),
   };
 
@@ -171,6 +184,46 @@ function editNode(nodeId) {
   openModal(nodeId);
 }
 
+function updateDerivedHeight(form) {
+  const altEl = form.querySelector('[name="altitude_m"]');
+  const elevEl = form.querySelector('[name="elevation_m"]');
+  const heightEl = form.querySelector('[name="ground_height_m"]');
+  if (!altEl || !elevEl || !heightEl) return;
+
+  const elevation = parseFloat(elevEl.value);
+  if (!Number.isFinite(elevation)) return;
+
+  const altitude = parseFloat(altEl.value);
+  if (Number.isFinite(altitude)) {
+    heightEl.value = (altitude - elevation).toFixed(2);
+  }
+}
+
+function attachHeightSync(form) {
+  const altEl = form.querySelector('[name="altitude_m"]');
+  const elevEl = form.querySelector('[name="elevation_m"]');
+  const heightEl = form.querySelector('[name="ground_height_m"]');
+  if (!altEl || !elevEl || !heightEl) return;
+
+  const getElevation = () => parseFloat(elevEl.value);
+
+  altEl.addEventListener('input', () => {
+    const elevation = getElevation();
+    const altitude = parseFloat(altEl.value);
+    if (Number.isFinite(elevation) && Number.isFinite(altitude)) {
+      heightEl.value = (altitude - elevation).toFixed(2);
+    }
+  });
+
+  heightEl.addEventListener('input', () => {
+    const elevation = getElevation();
+    const height = parseFloat(heightEl.value);
+    if (Number.isFinite(elevation) && Number.isFinite(height)) {
+      altEl.value = (elevation + height).toFixed(2);
+    }
+  });
+}
+
 async function deleteNode(nodeId) {
   if (!confirm(`Eliminare il nodo ${nodeId}? L'operazione non è reversibile.`)) return;
   try {
@@ -190,6 +243,8 @@ const NodeSchema = {
     short_name: { type: 'string' },
     long_name: { type: 'string' },
     position: { type: 'object', properties: { lat: { type: 'number' }, lon: { type: 'number' } } },
+    altitude_m: { type: 'number' },
+    elevation_m: { type: 'number' },
     ground_height_m: { type: 'number' },
     frequency_mhz: { type: 'number' },
     modem_preset: { type: 'string' },

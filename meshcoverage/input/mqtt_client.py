@@ -88,7 +88,7 @@ class MQTTClient:
             # Extract nodes from packet
             nodes = parse_mqtt_packet(packet)
             for node in nodes:
-                database.upsert_node(node)
+                database.upsert_node(node, from_auto_source=True)
                 self.stats["nodes_updated"] += 1
                 if self.on_node_update:
                     self.on_node_update(node)

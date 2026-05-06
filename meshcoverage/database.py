@@ -91,10 +91,13 @@ def get_node(node_id: str) -> Optional[Node]:
         return _dict_to_node(data)
 
 
-def upsert_node(node: Node) -> Node:
+def upsert_node(node: Node, from_auto_source: bool = False) -> Node:
     """
     Inserts or updates a node in the database.
     If a node with the same ID already exists, merges the data (keeps the most recent).
+
+    If the existing node has auto_update=False and the update is coming from
+    an automatic source (MQTT/direct), the existing node is preserved.
     """
     with _lock:
         raw = _load_raw()
@@ -103,6 +106,9 @@ def upsert_node(node: Node) -> Node:
         if existing_data:
             existing = _dict_to_node(existing_data)
             if existing:
+                if existing.auto_update is False and from_auto_source:
+                    log.debug(f"Skipped auto-update for node: {node.id}")
+                    return existing
                 existing.update_from(node)
                 node = existing
 

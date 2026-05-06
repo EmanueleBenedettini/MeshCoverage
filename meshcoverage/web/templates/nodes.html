@@ -102,7 +102,11 @@
           <td>
             {% if node.position %}
               <span class="coords">{{ "%.4f"|format(node.position.lat) }}, {{ "%.4f"|format(node.position.lon) }}</span>
-              {% if node.ground_height_m %}<span class="alt">↑{{ node.ground_height_m|int }}m</span>{% endif %}
+              <div class="node-elev-info">
+                {% if node.altitude_m is not none %}<span class="alt">alt {{ node.altitude_m|round(1) }}m</span>{% endif %}
+                {% if node.elevation_m is not none %}<span class="alt">dem {{ node.elevation_m|round(1) }}m</span>{% endif %}
+                {% if node.ground_height_m is not none %}<span class="alt">↑{{ node.ground_height_m|round(1) }}m</span>{% endif %}
+              </div>
             {% else %}
               <span class="text-muted">—</span>
             {% endif %}
@@ -212,6 +216,14 @@
         <div class="form-group">
           <label>Longitudine</label>
           <input type="number" name="lon" step="0.000001" placeholder="9.000000">
+        </div>
+        <div class="form-group">
+          <label>Altitudine GPS (m slm)</label>
+          <input type="number" name="altitude_m" step="0.1" placeholder="100">
+        </div>
+        <div class="form-group">
+          <label>Quota DEM terreno (m slm)</label>
+          <input type="number" name="elevation_m" step="0.1" placeholder="97" readonly>
         </div>
         <div class="form-group">
           <label>Altezza antenna dal suolo (m)</label>
