@@ -285,12 +285,15 @@ async def get_node_shadow_zones_image(
 
     Shadow points are rendered with a dark-indigo palette, visually
     distinct from the coverage layer so both can be shown simultaneously.
+    Shadows are masked out where coverage exists.
 
     Response: { image: "data:image/png;base64,...",
                 bounds: [[lat_min, lon_min], [lat_max, lon_max]] }
     """
     from meshcoverage.processing.viewshed import load_viewshed
-    from meshcoverage.processing.raster_renderer import render_shadow_png
+    from meshcoverage.processing.raster_renderer import render_shadow_png, GRID_DEG, MAX_DIM
+    from scipy.ndimage import gaussian_filter
+    import numpy as np
 
     safe_id = node_id.lstrip("!").lower()
     path = settings.coverage_dir / f"coverage_{safe_id}.npz"
@@ -324,6 +327,7 @@ async def get_node_shadow_zones_image(
         mask = shadow_distances <= max_dist_m
         shadow_lats = shadow_lats[mask]
         shadow_lons = shadow_lons[mask]
+        shadow_distances = shadow_distances[mask]
 
     if len(shadow_lats) == 0:
         raise HTTPException(
@@ -331,9 +335,55 @@ async def get_node_shadow_zones_image(
             detail="No shadow points within the requested distance.",
         )
 
+    # Get coverage points for masking
+    threshold = settings.min_link_margin_db
+    cov_mask = data["link_margin_db"] >= threshold
+    coverage_lats = data["lats"][cov_mask].astype(np.float32)
+    coverage_lons = data["lons"][cov_mask].astype(np.float32)
+
+    # Combined
+    all_lats = np.concatenate([shadow_lats, coverage_lats])
+    all_lons = np.concatenate([shadow_lons, coverage_lons])
+
+    # Compute bounds
+    grid_deg = GRID_DEG
+    lat_min = round(float(all_lats.min()) / grid_deg) * grid_deg - grid_deg
+    lat_max = round(float(all_lats.max()) / grid_deg) * grid_deg + grid_deg
+    lon_min = round(float(all_lons.min()) / grid_deg) * grid_deg - grid_deg
+    lon_max = round(float(all_lons.max()) / grid_deg) * grid_deg + grid_deg
+
+    n_rows_raw = int(round((lat_max - lat_min) / grid_deg)) + 1
+    n_cols_raw = int(round((lon_max - lon_min) / grid_deg)) + 1
+
+    scale = min(1.0, MAX_DIM / max(n_rows_raw, n_cols_raw, 1))
+    n_rows = max(4, int(n_rows_raw * scale))
+    n_cols = max(4, int(n_cols_raw * scale))
+
+    # Compute coverage weight
+    coverage_weight = None
+    if len(coverage_lats) > 0:
+        grid = np.full((n_rows, n_cols), np.nan, dtype=np.float32)
+        r_idx = np.clip(
+            np.round((lat_max - coverage_lats) / (lat_max - lat_min) * (n_rows - 1)).astype(int),
+            0, n_rows - 1,
+        )
+        c_idx = np.clip(
+            np.round((coverage_lons - lon_min) / (lon_max - lon_min) * (n_cols - 1)).astype(int),
+            0, n_cols - 1,
+        )
+        for r, c in zip(r_idx, c_idx):
+            if np.isnan(grid[r, c]):
+                grid[r, c] = 1.0
+        valid = (~np.isnan(grid)).astype(np.float32)
+        sigma = 1.8 / scale if scale < 1.0 else 1.8
+        coverage_weight = gaussian_filter(valid, sigma=sigma)
+
     result = render_shadow_png(
         shadow_lats.astype(np.float32),
         shadow_lons.astype(np.float32),
+        bounds_from_lats=all_lats,
+        bounds_from_lons=all_lons,
+        mask_alpha_where_weight_nonzero=coverage_weight,
     )
     if result is None:
         raise HTTPException(status_code=404, detail="Renderer returned no data.")

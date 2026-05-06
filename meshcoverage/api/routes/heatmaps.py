@@ -95,13 +95,15 @@ async def get_shadow_zones_image(freq: int, preset: str):
 
     Shadow points are rendered with a dark-indigo palette, visually
     distinct from the coverage heatmap so both layers can be shown
-    simultaneously without confusion.
+    simultaneously without confusion. Shadows are masked out where
+    coverage exists to prevent overlap.
 
     Response: { image: "data:image/png;base64,...",
                 bounds: [[lat_min, lon_min], [lat_max, lon_max]] }
     """
     import numpy as np
-    from meshcoverage.processing.raster_renderer import render_shadow_png
+    from meshcoverage.processing.raster_renderer import render_shadow_png, GRID_DEG
+    from scipy.ndimage import gaussian_filter
 
     path = _shadow_path(freq, preset)
     if not path.exists():
@@ -120,10 +122,63 @@ async def get_shadow_zones_image(freq: int, preset: str):
     if not features:
         raise HTTPException(status_code=404, detail="No shadow data available.")
 
-    lons = np.array([ft["geometry"]["coordinates"][0] for ft in features], dtype=np.float32)
-    lats = np.array([ft["geometry"]["coordinates"][1] for ft in features], dtype=np.float32)
+    shadow_lats = np.array([ft["geometry"]["coordinates"][1] for ft in features], dtype=np.float32)
+    shadow_lons = np.array([ft["geometry"]["coordinates"][0] for ft in features], dtype=np.float32)
 
-    result = render_shadow_png(lats, lons)
+    # Get coverage points for masking
+    heatmap_path = _heatmap_path(freq, preset)
+    with open(heatmap_path) as f:
+        coverage_geojson = json.load(f)
+
+    coverage_features = coverage_geojson.get("features", [])
+    coverage_lats = np.array([ft["geometry"]["coordinates"][1] for ft in coverage_features], dtype=np.float32) if coverage_features else np.array([], dtype=np.float32)
+    coverage_lons = np.array([ft["geometry"]["coordinates"][0] for ft in coverage_features], dtype=np.float32) if coverage_features else np.array([], dtype=np.float32)
+
+    # Combined bounds
+    all_lats = np.concatenate([shadow_lats, coverage_lats])
+    all_lons = np.concatenate([shadow_lons, coverage_lons])
+    if len(all_lats) == 0:
+        raise HTTPException(status_code=404, detail="No data.")
+
+    grid_deg = GRID_DEG
+    lat_min = round(float(all_lats.min()) / grid_deg) * grid_deg - grid_deg
+    lat_max = round(float(all_lats.max()) / grid_deg) * grid_deg + grid_deg
+    lon_min = round(float(all_lons.min()) / grid_deg) * grid_deg - grid_deg
+    lon_max = round(float(all_lons.max()) / grid_deg) * grid_deg + grid_deg
+
+    n_rows_raw = int(round((lat_max - lat_min) / grid_deg)) + 1
+    n_cols_raw = int(round((lon_max - lon_min) / grid_deg)) + 1
+
+    from meshcoverage.processing.raster_renderer import MAX_DIM
+    scale = min(1.0, MAX_DIM / max(n_rows_raw, n_cols_raw, 1))
+    n_rows = max(4, int(n_rows_raw * scale))
+    n_cols = max(4, int(n_cols_raw * scale))
+
+    # Compute coverage weight
+    coverage_weight = None
+    if len(coverage_lats) > 0:
+        grid = np.full((n_rows, n_cols), np.nan, dtype=np.float32)
+        r_idx = np.clip(
+            np.round((lat_max - coverage_lats) / (lat_max - lat_min) * (n_rows - 1)).astype(int),
+            0, n_rows - 1,
+        )
+        c_idx = np.clip(
+            np.round((coverage_lons - lon_min) / (lon_max - lon_min) * (n_cols - 1)).astype(int),
+            0, n_cols - 1,
+        )
+        for r, c in zip(r_idx, c_idx):
+            if np.isnan(grid[r, c]):
+                grid[r, c] = 1.0
+        valid = (~np.isnan(grid)).astype(np.float32)
+        sigma = 1.8 / scale if scale < 1.0 else 1.8
+        coverage_weight = gaussian_filter(valid, sigma=sigma)
+
+    result = render_shadow_png(
+        shadow_lats, shadow_lons,
+        bounds_from_lats=all_lats,
+        bounds_from_lons=all_lons,
+        mask_alpha_where_weight_nonzero=coverage_weight,
+    )
     if result is None:
         raise HTTPException(status_code=404, detail="No renderable shadow data.")
 

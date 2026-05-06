@@ -108,6 +108,9 @@ def render_raster_png(
     vmax: float = 30.0,
     alpha_min: int = 40,
     alpha_max: int = 210,
+    bounds_from_lats: Optional[np.ndarray] = None,
+    bounds_from_lons: Optional[np.ndarray] = None,
+    mask_alpha_where_weight_nonzero: Optional[np.ndarray] = None,
 ) -> Optional[dict]:
     """
     Build a georeferenced RGBA PNG from a sparse set of (lat, lon, value) points.
@@ -127,6 +130,10 @@ def render_raster_png(
         vmin, vmax:     Normalisation bounds for values.
         alpha_min:      Minimum alpha (where weight is near the edge of coverage).
         alpha_max:      Maximum alpha (where weight is densely covered).
+        bounds_from_lats, bounds_from_lons: Optional arrays to compute bounds from,
+                        instead of using lats/lons. Useful for aligning grids.
+        mask_alpha_where_weight_nonzero: Optional 2D array of same shape as grid,
+                        where alpha is set to 0 if this weight > 0.05.
 
     Returns:
         {
@@ -146,10 +153,16 @@ def render_raster_png(
         colour_stops = _COVERAGE_COLOUR_STOPS
 
     # ── Snap bounds to the grid with one-cell padding ──────────────────────
-    lat_min = round(float(lats.min()) / grid_deg) * grid_deg - grid_deg
-    lat_max = round(float(lats.max()) / grid_deg) * grid_deg + grid_deg
-    lon_min = round(float(lons.min()) / grid_deg) * grid_deg - grid_deg
-    lon_max = round(float(lons.max()) / grid_deg) * grid_deg + grid_deg
+    if bounds_from_lats is not None and bounds_from_lons is not None:
+        lat_min = round(float(bounds_from_lats.min()) / grid_deg) * grid_deg - grid_deg
+        lat_max = round(float(bounds_from_lats.max()) / grid_deg) * grid_deg + grid_deg
+        lon_min = round(float(bounds_from_lons.min()) / grid_deg) * grid_deg - grid_deg
+        lon_max = round(float(bounds_from_lons.max()) / grid_deg) * grid_deg + grid_deg
+    else:
+        lat_min = round(float(lats.min()) / grid_deg) * grid_deg - grid_deg
+        lat_max = round(float(lats.max()) / grid_deg) * grid_deg + grid_deg
+        lon_min = round(float(lons.min()) / grid_deg) * grid_deg - grid_deg
+        lon_max = round(float(lons.max()) / grid_deg) * grid_deg + grid_deg
 
     n_rows_raw = int(round((lat_max - lat_min) / grid_deg)) + 1
     n_cols_raw = int(round((lon_max - lon_min) / grid_deg)) + 1
@@ -205,6 +218,10 @@ def render_raster_png(
         0,
     ).astype(np.uint8)
 
+    # ── Mask alpha where coverage weight is non-zero ──────────────────────
+    if mask_alpha_where_weight_nonzero is not None:
+        alpha = np.where(mask_alpha_where_weight_nonzero > 0.05, 0, alpha)
+
     # ── Encode PNG ─────────────────────────────────────────────────────────
     rgba = np.stack([r_ch, g_ch, b_ch, alpha], axis=-1)
     img  = Image.fromarray(rgba, 'RGBA')
@@ -237,7 +254,7 @@ def render_coverage_png(
     lons: np.ndarray,
     link_budgets: np.ndarray,
     grid_deg: float = GRID_DEG,
-    sigma_cells: float = 1.8,
+    sigma_cells: float = 2.5,   #1.8
 ) -> Optional[dict]:
     """
     Render link-budget values as a georeferenced RGBA PNG.
@@ -267,6 +284,9 @@ def render_shadow_png(
     lons: np.ndarray,
     grid_deg: float = GRID_DEG,
     sigma_cells: float = 2.5,
+    bounds_from_lats: Optional[np.ndarray] = None,
+    bounds_from_lons: Optional[np.ndarray] = None,
+    mask_alpha_where_weight_nonzero: Optional[np.ndarray] = None,
 ) -> Optional[dict]:
     """
     Render terrain shadow zones as a georeferenced RGBA PNG.
@@ -278,6 +298,13 @@ def render_shadow_png(
 
     A slightly larger sigma (2.5 vs 1.8 for coverage) softens the
     boundaries further, making the dead-zone extents easier to read.
+
+    Args:
+        lats, lons: Point coordinates.
+        grid_deg: Grid cell size.
+        sigma_cells: Blur radius.
+        bounds_from_lats, bounds_from_lons: Optional for bounds calculation.
+        mask_alpha_where_weight_nonzero: Optional mask to zero alpha.
     """
     if len(lats) == 0:
         return None
@@ -294,4 +321,7 @@ def render_shadow_png(
         vmax=1.0,
         alpha_min=25,
         alpha_max=165,
+        bounds_from_lats=bounds_from_lats,
+        bounds_from_lons=bounds_from_lons,
+        mask_alpha_where_weight_nonzero=mask_alpha_where_weight_nonzero,
     )
