@@ -5,7 +5,9 @@ Endpoints:
   GET /api/heatmaps                               — list available heatmaps
   GET /api/heatmaps/{freq}/{preset}               — GeoJSON heatmap for freq+preset
   GET /api/heatmaps/{freq}/{preset}/metadata      — heatmap metadata
-  GET /api/heatmaps/{freq}/{preset}/shadows       — GeoJSON shadow zones   ← NEW
+  GET /api/heatmaps/{freq}/{preset}/image         — georeferenced PNG for coverage
+  GET /api/heatmaps/{freq}/{preset}/shadows       — GeoJSON shadow zones
+  GET /api/heatmaps/{freq}/{preset}/shadows/image — georeferenced PNG for shadows
   POST /api/heatmaps/generate                     — regenerate all heatmaps
 """
 from __future__ import annotations
@@ -85,6 +87,49 @@ async def get_heatmap_metadata(freq: int, preset: str):
         return json.load(f)
 
 
+@router.get("/{freq}/{preset}/shadows/image")
+async def get_shadow_zones_image(freq: int, preset: str):
+    """
+    Returns aggregated terrain shadow zones as a georeferenced PNG
+    suitable for L.imageOverlay.
+
+    Shadow points are rendered with a dark-indigo palette, visually
+    distinct from the coverage heatmap so both layers can be shown
+    simultaneously without confusion.
+
+    Response: { image: "data:image/png;base64,...",
+                bounds: [[lat_min, lon_min], [lat_max, lon_max]] }
+    """
+    import numpy as np
+    from meshcoverage.processing.raster_renderer import render_shadow_png
+
+    path = _shadow_path(freq, preset)
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Shadow data for {freq}MHz / {preset} not found. "
+                "Run calculation first (shadows are generated alongside heatmaps)."
+            )
+        )
+
+    with open(path) as f:
+        geojson = json.load(f)
+
+    features = geojson.get("features", [])
+    if not features:
+        raise HTTPException(status_code=404, detail="No shadow data available.")
+
+    lons = np.array([ft["geometry"]["coordinates"][0] for ft in features], dtype=np.float32)
+    lats = np.array([ft["geometry"]["coordinates"][1] for ft in features], dtype=np.float32)
+
+    result = render_shadow_png(lats, lons)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No renderable shadow data.")
+
+    return result
+
+
 @router.get("/{freq}/{preset}/shadows")
 async def get_shadow_zones(
     freq: int,
@@ -162,6 +207,7 @@ async def get_shadow_zones(
         },
     }
 
+
 @router.get("/{freq}/{preset}/image")
 async def get_heatmap_image(
     freq: int,
@@ -205,6 +251,7 @@ async def get_heatmap_image(
 
     return result
 
+
 @router.get("/{freq}/{preset}")
 async def get_heatmap(
     freq: int,
@@ -218,7 +265,7 @@ async def get_heatmap(
     """
     Returns the aggregated heatmap as GeoJSON FeatureCollection.
     For each point, the maximum link budget among all nodes is present.
-    
+
     Optional parameters:
     - min_budget: filters points below threshold
     - bbox: crops area of interest

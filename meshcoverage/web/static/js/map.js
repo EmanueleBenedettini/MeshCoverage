@@ -2,8 +2,8 @@
  * MeshMonitor — Main map logic (Leaflet.js)
  *
  * Handles:
- * - Heatmap layer (canvas pixel overlay)
- * - Shadow zone layer (canvas overlay — dark hatched areas)
+ * - Heatmap layer (georeferenced PNG overlay via L.imageOverlay)
+ * - Shadow zone layer (georeferenced PNG overlay via L.imageOverlay)
  * - Inter-node connection layer (LineString)
  * - Node marker layer
  * - Sidebar with node detail and radiation diagram
@@ -14,6 +14,9 @@
  *   A positive value means the link is viable; higher is better.
  *   Colour bands: green ≥ 20 dB | amber ≥ 10 dB | red < 10 dB
  *   This was previously (and incorrectly) labelled "link budget" in the UI.
+ *
+ * LAYER ORDER (bottom → top):
+ *   OSM tiles → shadow zones → coverage heatmap → link lines → node markers
  */
 
 'use strict';
@@ -33,115 +36,7 @@ const state = {
   showNodes: true,
 };
 
-// ── PixelCoverageLayer — solid-pixel canvas raster ─────────────────────────
-//
-// Replaces leaflet.heat with a canvas layer that draws solid rectangles
-// for each grid cell. No blur, no isolated dots at high zoom: coloured
-// squares that fill the grid cell are shown instead.
-
-//const PixelCoverageLayer = L.Layer.extend({
-//
-//  initialize: function (points, options) {
-//    // points: [{lat, lon, lb}]
-//    this._points = points || [];
-//    L.setOptions(this, L.extend({
-//      gridDeg: 0.001,   // grid resolution in degrees (~100 m at mid-EU latitude)
-//      opacity: 0.75,
-//    }, options));
-//  },
-//
-//  onAdd: function (map) {
-//    this._map = map;
-//    this._canvas = L.DomUtil.create('canvas', 'leaflet-layer');
-//    // pointer-events:none prevents the canvas from swallowing map clicks
-//    this._canvas.style.pointerEvents = 'none';
-//    map.getPanes().overlayPane.appendChild(this._canvas);
-//
-//    // viewreset fires when Leaflet resets the pixel-origin to prevent
-//    // floating-point drift — must redraw on that event too
-//    map.on('viewreset moveend zoomend resize', this._reset, this);
-//
-//    // NOTE: we do NOT listen to 'move' (pan animation frames).
-//    // Repositioning every frame while leaving stale content causes the
-//    // coverage layer to appear frozen while tiles scroll underneath.
-//    // Leaflet moves the whole overlayPane during pan (good enough visually);
-//    // on 'moveend' we reposition and redraw cleanly.
-//
-//    this._reset();
-//    return this;
-//  },
-//
-//  onRemove: function (map) {
-//    if (this._canvas) {
-//      L.DomUtil.remove(this._canvas);
-//      this._canvas = null;
-//    }
-//    map.off('viewreset moveend zoomend resize', this._reset, this);
-//  },
-//
-//  // Reposition + resize the canvas and repaint all visible points.
-//  _reset: function () {
-//    if (!this._canvas || !this._map) return;
-//
-//    var size = this._map.getSize();
-//    this._canvas.width  = size.x;
-//    this._canvas.height = size.y;
-//
-//    // Align canvas top-left to the map container's top-left corner.
-//    // containerPointToLayerPoint([0,0]) returns the offset needed to
-//    // counteract the overlayPane's own CSS transform.
-//    var topLeft = this._map.containerPointToLayerPoint([0, 0]);
-//    L.DomUtil.setPosition(this._canvas, topLeft);
-//
-//    this._draw();
-//  },
-//
-//  _draw: function () {
-//    if (!this._canvas || !this._map || !this._points.length) return;
-//
-//    var map    = this._map;
-//    var canvas = this._canvas;
-//    var ctx    = canvas.getContext('2d');
-//
-//    ctx.clearRect(0, 0, canvas.width, canvas.height);
-//
-//    // Calculate how many pixels one grid cell occupies at the current zoom.
-//    // We use the map centre as a reference for an accurate estimate.
-//    var GRID   = this.options.gridDeg;
-//    var center = map.getCenter();
-//    var p0 = map.latLngToContainerPoint(L.latLng(center.lat,        center.lng));
-//    var p1 = map.latLngToContainerPoint(L.latLng(center.lat + GRID, center.lng + GRID));
-//    // +1 to avoid gaps between adjacent cells; minimum 2 px for visibility
-//    var cellW = Math.max(2, Math.ceil(Math.abs(p1.x - p0.x)) + 1);
-//    var cellH = Math.max(2, Math.ceil(Math.abs(p1.y - p0.y)) + 1);
-//
-//    // Small padding so points partially visible at the edge are not clipped
-//    var bounds = map.getBounds().pad(0.05);
-//
-//    var pts = this._points;
-//    for (var i = 0, len = pts.length; i < len; i++) {
-//      var pt = pts[i];
-//
-//      // Fast viewport cull
-//      if (pt.lat < bounds.getSouth() || pt.lat > bounds.getNorth() ||
-//          pt.lon < bounds.getWest()  || pt.lon > bounds.getEast()) continue;
-//
-//      var cp = map.latLngToContainerPoint(L.latLng(pt.lat, pt.lon));
-//      ctx.fillStyle = lbToColor(pt.lb, this.options.opacity);
-//      ctx.fillRect(
-//        Math.round(cp.x - cellW / 2),
-//        Math.round(cp.y - cellH / 2),
-//        cellW,
-//        cellH
-//      );
-//    }
-//  },
-//});
-
 // ── Link margin colour gradient ────────────────────────────────────────────
-//
-// The same colour ramp as before, applied as a solid pixel colour
-// (no blur), mapped to link margin (dB above sensitivity).
 //
 //  margin ≤ -10  →  dark blue  #1e3a5f
 //  margin ≈  0   →  blue       #1d4ed8
@@ -191,6 +86,24 @@ function marginClass(margin_db) {
   if (margin_db >= 20) return 'lb-good';
   if (margin_db >= 10) return 'lb-medium';
   return 'lb-poor';
+}
+
+// ── Layer ordering helpers ─────────────────────────────────────────────────
+//
+// Desired render order (bottom → top):
+//   OSM tiles → shadow zones → coverage heatmap → link lines → node markers
+//
+// After any add/remove operation that could disrupt the order, call
+// _enforceLayerOrder() to restore it.
+
+function _enforceLayerOrder() {
+  // bringToBack() sends a layer directly above the tile pane.
+  // Order matters: last bringToBack() ends up on top of the others.
+  if (shadowLayer && map.hasLayer(shadowLayer)) shadowLayer.bringToBack();
+  if (heatLayer   && map.hasLayer(heatLayer))   heatLayer.bringToBack();
+  // heatLayer was pushed back last → sits above shadowLayer
+  // link lines and node markers are in LayerGroups added after tiles,
+  // so they naturally appear above both image overlays.
 }
 
 // ── Map initialisation ─────────────────────────────────────────────────────
@@ -319,14 +232,14 @@ async function applyFilters() {
   state.preset    = selPreset?.value || null;
   state.minBudget = parseFloat(inpBudget?.value || '0');
 
-  await Promise.all([
-    loadHeatmap(),
-    loadShadows(),
-    loadLinks(),
-  ]);
+  // Load shadow zones first so the coverage heatmap renders above them
+  await loadShadows();
+  await loadHeatmap();
+  await loadLinks();
 }
 
 // ── Heatmap (georeferenced PNG overlay) ───────────────────────────────────
+
 async function loadHeatmap() {
   if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
   if (!state.freq || !state.preset || !state.showHeatmap) return;
@@ -341,53 +254,42 @@ async function loadHeatmap() {
       interactive: false,
     });
 
-    if (state.showHeatmap) map.addLayer(heatLayer);
+    if (state.showHeatmap) {
+      map.addLayer(heatLayer);
+      _enforceLayerOrder();
+    }
 
   } catch (e) {
     console.warn('Heatmap load failed:', e.message);
   }
 }
 
-// ── Shadow zones ───────────────────────────────────────────────────────────
-/**
- * Renders terrain shadow zones using a canvas-based dot overlay.
- * Shadow zones are displayed as semi-transparent dark purple/grey dots
- * with a hatched pattern to visually distinguish them from low-signal areas.
- */
+// ── Shadow zones (georeferenced PNG overlay) ───────────────────────────────
+//
+// Shadow zones are rendered server-side via render_shadow_png() and returned
+// as a georeferenced RGBA PNG, exactly like the coverage heatmap.
+// The dark-indigo palette is visually distinct from the coverage gradient so
+// both layers can be shown simultaneously.
+//
+// Layer order: shadows sit below the coverage heatmap (see _enforceLayerOrder).
+
 async function loadShadows() {
   if (shadowLayer) { map.removeLayer(shadowLayer); shadowLayer = null; }
   if (!state.freq || !state.preset || !state.showShadows) return;
 
   try {
-    const url = `/api/heatmaps/${state.freq}/${state.preset}/shadows`;
-    const geojson = await apiGet(url);
-    if (!geojson?.features?.length) return;
+    const url = `/api/heatmaps/${state.freq}/${state.preset}/shadows/image`;
+    const data = await apiGet(url);
+    if (!data?.image || !data?.bounds) return;
 
-    // All shadow points have equal intensity — they are binary (blocked or not).
-    const points = geojson.features.map(f => {
-      const [lon, lat] = f.geometry.coordinates;
-      return [lat, lon, 1.0];
-    });
-
-    shadowLayer = L.heatLayer(points, {
-      radius: 14,
-      blur: 10,
-      maxZoom: 17,
-      // Dark purple gradient — visually distinct from the coverage heatmap
-      gradient: {
-        0.0: 'rgba(30,10,60,0)',
-        0.3: 'rgba(60,10,100,0.35)',
-        0.6: 'rgba(80,0,120,0.55)',
-        1.0: 'rgba(40,0,80,0.7)',
-      },
+    shadowLayer = L.imageOverlay(data.image, data.bounds, {
+      opacity: 0.60,
+      interactive: false,
     });
 
     if (state.showShadows) {
-      shadowLayer.addTo(map);
-      // Ensure shadow layer renders below heatmap layer
-      if (heatLayer) {
-        shadowLayer.setZIndex && shadowLayer.setZIndex(1);
-      }
+      map.addLayer(shadowLayer);
+      _enforceLayerOrder();
     }
 
   } catch (e) {
@@ -521,6 +423,8 @@ function infoItem(label, value) {
 function closeNodeDetail() {
   selectedNodeId = null;
   document.getElementById('node-detail').style.display = 'none';
+
+  // Remove per-node coverage and shadow overlays
   if (window._nodeCoverageLayer) {
     map.removeLayer(window._nodeCoverageLayer);
     window._nodeCoverageLayer = null;
@@ -529,9 +433,11 @@ function closeNodeDetail() {
     map.removeLayer(window._nodeShadowLayer);
     window._nodeShadowLayer = null;
   }
+
   renderNodeMarkers();
-  loadHeatmap();
-  loadShadows();
+
+  // Restore global heatmap and shadow layers
+  loadShadows().then(loadHeatmap);
 }
 
 // ── Radiation diagram ──────────────────────────────────────────────────────
@@ -656,7 +562,13 @@ async function loadNodeLinksDetail(nodeId) {
 }
 
 // ── Single-node coverage + shadow zones ───────────────────────────────────
+//
+// When a node is selected, the global heatmap and shadow layers are hidden
+// and replaced with per-node image overlays.  Layer order is the same as
+// for the global view: shadow below coverage.
+
 async function loadNodeCoverage(nodeId) {
+  // Remove previous per-node overlays
   if (window._nodeCoverageLayer) {
     map.removeLayer(window._nodeCoverageLayer);
     window._nodeCoverageLayer = null;
@@ -665,47 +577,45 @@ async function loadNodeCoverage(nodeId) {
     map.removeLayer(window._nodeShadowLayer);
     window._nodeShadowLayer = null;
   }
+
+  // Hide global layers while a node is selected
   if (heatLayer)   map.removeLayer(heatLayer);
   if (shadowLayer) map.removeLayer(shadowLayer);
 
-  // -- Single-node coverage image --
-  try {
-    const url  = `/api/coverage/${nodeId}/image?min_budget=${state.minBudget}`;
-    const data = await apiGet(url);
-    if (data?.image && data?.bounds) {
-      window._nodeCoverageLayer = L.imageOverlay(data.image, data.bounds, {
-        opacity: 0.80,
-        interactive: false,
-      });
-      map.addLayer(window._nodeCoverageLayer);
-    }
-  } catch (e) {
-    console.warn('Node coverage image not available:', e.message);
-  }
-
-  // -- Shadow zones (leaflet.heat, unchanged) --
+  // ── Per-node shadow zones (rendered below coverage) ────────────────────
   if (state.showShadows) {
     try {
-      const shadowGeojson = await apiGet(`/api/coverage/${nodeId}/shadows`);
-      if (shadowGeojson?.features?.length) {
-        const pts = shadowGeojson.features.map(f => {
-          const [lon, lat] = f.geometry.coordinates;
-          return [lat, lon, 1.0];
-        });
-        window._nodeShadowLayer = L.heatLayer(pts, {
-          radius: 12, blur: 8, maxZoom: 17,
-          gradient: {
-            0.0: 'rgba(30,10,60,0)',
-            0.3: 'rgba(60,10,100,0.35)',
-            0.6: 'rgba(80,0,120,0.55)',
-            1.0: 'rgba(40,0,80,0.7)',
-          },
+      const shadowData = await apiGet(`/api/coverage/${nodeId}/shadows/image`);
+      if (shadowData?.image && shadowData?.bounds) {
+        window._nodeShadowLayer = L.imageOverlay(shadowData.image, shadowData.bounds, {
+          opacity: 0.60,
+          interactive: false,
         }).addTo(map);
       }
     } catch (e) {
       console.warn('Node shadow zones not available:', e.message);
     }
   }
+
+  // ── Per-node coverage image (rendered above shadow) ────────────────────
+  try {
+    const coverageData = await apiGet(
+      `/api/coverage/${nodeId}/image?min_budget=${state.minBudget}`
+    );
+    if (coverageData?.image && coverageData?.bounds) {
+      window._nodeCoverageLayer = L.imageOverlay(coverageData.image, coverageData.bounds, {
+        opacity: 0.80,
+        interactive: false,
+      }).addTo(map);
+    }
+  } catch (e) {
+    console.warn('Node coverage image not available:', e.message);
+  }
+
+  // Enforce shadow-below-coverage order for per-node layers
+  if (window._nodeShadowLayer)   window._nodeShadowLayer.bringToBack();
+  if (window._nodeCoverageLayer) window._nodeCoverageLayer.bringToBack();
+  // _nodeCoverageLayer was pushed back last → sits above _nodeShadowLayer
 }
 
 // ── Computation triggers ───────────────────────────────────────────────────
@@ -734,19 +644,35 @@ function toggleHeatmap() {
   if (!heatLayer) return;
   if (state.showHeatmap) {
     map.addLayer(heatLayer);
+    _enforceLayerOrder();
   } else {
     map.removeLayer(heatLayer);
   }
 }
 
 function toggleShadows() {
+  // Global shadow layer (shown when no node is selected)
   if (shadowLayer) {
-    state.showShadows ? map.addLayer(shadowLayer) : map.removeLayer(shadowLayer);
+    if (state.showShadows) {
+      map.addLayer(shadowLayer);
+      _enforceLayerOrder();
+    } else {
+      map.removeLayer(shadowLayer);
+    }
   }
+
+  // Per-node shadow layer (shown when a node is selected)
   if (window._nodeShadowLayer) {
-    state.showShadows ? map.addLayer(window._nodeShadowLayer) : map.removeLayer(window._nodeShadowLayer);
+    if (state.showShadows) {
+      map.addLayer(window._nodeShadowLayer);
+      if (window._nodeShadowLayer)   window._nodeShadowLayer.bringToBack();
+      if (window._nodeCoverageLayer) window._nodeCoverageLayer.bringToBack();
+    } else {
+      map.removeLayer(window._nodeShadowLayer);
+    }
   }
-  // If enabling and the layer has not been loaded yet, fetch it
+
+  // If enabling and no layer is loaded yet, fetch it
   if (state.showShadows && !shadowLayer && !selectedNodeId) {
     loadShadows();
   }

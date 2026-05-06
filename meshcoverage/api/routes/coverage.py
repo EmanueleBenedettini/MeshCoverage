@@ -2,14 +2,16 @@
 API per il calcolo e la lettura della copertura radio.
 
 Endpoints:
-  POST /api/coverage/compute/all          — avvia calcolo per tutti i nodi
-  POST /api/coverage/compute/{node_id}    — avvia calcolo per nodo singolo
-  GET  /api/coverage/status               — stato calcolo globale
-  GET  /api/coverage/status/{node_id}     — stato calcolo nodo specifico
-  GET  /api/coverage/{node_id}/geojson    — copertura nodo come GeoJSON
-  GET  /api/coverage/{node_id}/shadows    — shadow zones come GeoJSON   ← NEW
-  GET  /api/coverage/{node_id}/metadata   — metadati calcolo nodo
-  GET  /api/coverage/available            — lista nodi con copertura calcolata
+  POST /api/coverage/compute/all            — avvia calcolo per tutti i nodi
+  POST /api/coverage/compute/{node_id}      — avvia calcolo per nodo singolo
+  GET  /api/coverage/status                 — stato calcolo globale
+  GET  /api/coverage/status/{node_id}       — stato calcolo nodo specifico
+  GET  /api/coverage/{node_id}/geojson      — copertura nodo come GeoJSON
+  GET  /api/coverage/{node_id}/image        — copertura nodo come PNG georeferenziato
+  GET  /api/coverage/{node_id}/shadows      — shadow zones come GeoJSON
+  GET  /api/coverage/{node_id}/shadows/image — shadow zones come PNG georeferenziato
+  GET  /api/coverage/{node_id}/metadata     — metadati calcolo nodo
+  GET  /api/coverage/available              — lista nodi con copertura calcolata
 """
 from __future__ import annotations
 import asyncio
@@ -225,8 +227,8 @@ async def get_node_metadata(node_id: str):
         )
     with open(meta_path) as f:
         return json.load(f)
-    
-    
+
+
 @router.get("/{node_id}/image")
 async def get_node_coverage_image(
     node_id: str,
@@ -263,6 +265,76 @@ async def get_node_coverage_image(
         raise HTTPException(status_code=404, detail="No points above the requested threshold.")
 
     result = render_coverage_png(lats, lons, lbs)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Renderer returned no data.")
+
+    return result
+
+
+@router.get("/{node_id}/shadows/image")
+async def get_node_shadow_zones_image(
+    node_id: str,
+    max_distance_km: float = Query(
+        default=None,
+        description="Limit shadow zones to this distance from the antenna (km)"
+    ),
+):
+    """
+    Returns terrain shadow zones for the node as a georeferenced PNG
+    for L.imageOverlay.
+
+    Shadow points are rendered with a dark-indigo palette, visually
+    distinct from the coverage layer so both can be shown simultaneously.
+
+    Response: { image: "data:image/png;base64,...",
+                bounds: [[lat_min, lon_min], [lat_max, lon_max]] }
+    """
+    from meshcoverage.processing.viewshed import load_viewshed
+    from meshcoverage.processing.raster_renderer import render_shadow_png
+
+    safe_id = node_id.lstrip("!").lower()
+    path = settings.coverage_dir / f"coverage_{safe_id}.npz"
+
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Coverage not yet computed for this node. Run calculation first.",
+        )
+
+    data = load_viewshed(path)
+    if data is None:
+        raise HTTPException(status_code=404, detail="No viewshed data found.")
+
+    shadow_lats      = data.get("shadow_lats",      np.array([]))
+    shadow_lons      = data.get("shadow_lons",      np.array([]))
+    shadow_distances = data.get("shadow_distances", np.array([]))
+
+    if len(shadow_lats) == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No shadow data available for this node. "
+                "Recompute coverage to generate shadow zones."
+            ),
+        )
+
+    # Optional distance filter
+    if max_distance_km is not None:
+        max_dist_m = max_distance_km * 1000.0
+        mask = shadow_distances <= max_dist_m
+        shadow_lats = shadow_lats[mask]
+        shadow_lons = shadow_lons[mask]
+
+    if len(shadow_lats) == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="No shadow points within the requested distance.",
+        )
+
+    result = render_shadow_png(
+        shadow_lats.astype(np.float32),
+        shadow_lons.astype(np.float32),
+    )
     if result is None:
         raise HTTPException(status_code=404, detail="Renderer returned no data.")
 
@@ -338,11 +410,13 @@ async def get_node_coverage_geojson(
     }
 
 
-
 @router.get("/{node_id}/shadows")
 async def get_node_shadow_zones(
     node_id: str,
-    max_distance_km: float = Query(default=None, description="Limit shadow zones to this distance (km)"),
+    max_distance_km: float = Query(
+        default=None,
+        description="Limit shadow zones to this distance (km)"
+    ),
 ):
     """
     Returns terrain shadow zones for the node as a GeoJSON FeatureCollection.
@@ -373,8 +447,8 @@ async def get_node_shadow_zones(
             "properties": {"node_id": node_id, "shadow_count": 0},
         }
 
-    shadow_lats = data.get("shadow_lats", np.array([]))
-    shadow_lons = data.get("shadow_lons", np.array([]))
+    shadow_lats      = data.get("shadow_lats",      np.array([]))
+    shadow_lons      = data.get("shadow_lons",      np.array([]))
     shadow_distances = data.get("shadow_distances", np.array([]))
 
     if len(shadow_lats) == 0:
@@ -392,8 +466,8 @@ async def get_node_shadow_zones(
     if max_distance_km is not None:
         max_dist_m = max_distance_km * 1000.0
         mask = shadow_distances <= max_dist_m
-        shadow_lats = shadow_lats[mask]
-        shadow_lons = shadow_lons[mask]
+        shadow_lats      = shadow_lats[mask]
+        shadow_lons      = shadow_lons[mask]
         shadow_distances = shadow_distances[mask]
 
     features = [
